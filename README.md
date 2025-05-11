@@ -1,6 +1,6 @@
 # AsyncMiele
 
-An asynchronous Python client for Miele@Home devices.
+An asynchronous Python client for Miele@Home devices. It's a full rewrite of the [home-assistant-miele-mobile](https://github.com/username/home-assistant-miele-mobile) project with a focus of decoupling the API from Home Assistant.
 
 This library provides a simple, asynchronous interface to communicate with Miele appliances that support the Miele@Home protocol over local network (e.g., via XKM3100W module or built-in WiFi).
 
