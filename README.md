@@ -1,8 +1,18 @@
 # AsyncMiele
 
 An asynchronous Python client for Miele@Home devices. It's a full rewrite of the [home-assistant-miele-mobile](https://github.com/thuxnder/home-assistant-miele-mobile) project with a focus of decoupling the API from Home Assistant.
+This library also integrates some functionality from the [MieleRESTServer](https://github.com/akappner/MieleRESTServer) project for those who can't afford running an extra server.
+It also integrates some convenience functions from the [pymiele](https://github.com/nordicopen/pymiele) project, but doesn't require to communicate thru Miele cloud.
 
 This library provides a simple, asynchronous interface to communicate with Miele appliances that support the Miele@Home protocol over local network (e.g., via XKM3100W module or built-in WiFi).
+
+## Why a new library?
+
+The original [home-assistant-miele-mobile](https://github.com/thuxnder/home-assistant-miele-mobile) project is a great project, but it's tightly coupled to Home Assistant. Those, who don't use Home Assistant, can't use this project.
+The original [MieleRESTServer](https://github.com/akappner/MieleRESTServer) project is a great project, but it requires to run an extra REST server, which can be too much to run on a home automation controller.
+The original [pymiele](https://github.com/nordicopen/pymiele) project is a great project, but it requires to communicate thru Miele cloud. It is a very strong limitation for countries, which aren't supported by Miele cloud and for users, who prefer their home automation to be fully isolated on the local network.
+
+The library is a async merge of all 3 projects, mentioned above and is designed to integrate with any home automation system, which supports asyncio. 
 
 ## Features
 
