@@ -21,7 +21,7 @@ Outcome: planning artefacts committed; no functional change.
 
 ---
 
-## Phase 1 – Refactor Crypto Helpers (GET & PUT shared)
+## Phase 1 – Refactor Crypto Helpers (GET & PUT shared) ✅ Completed
 **Motivation:**  Current `_get_request()` reproduces the signing logic inline; we need it reusable.
 
 Steps
@@ -34,7 +34,7 @@ Outcome: deterministic helper covering GET & future PUT.
 
 ---
 
-## Phase 2 – Implement `_put_request()`
+## Phase 2 – Implement `_put_request()` ✅ Completed
 1.  Private async method mirroring `_get_request()` but accepting `body: bytes | dict | None`.
 2.  Steps performed:
     * Serialize body (JSON) **before** signing.
@@ -47,7 +47,7 @@ Outcome: generic signed/encrypted PUT capability.
 
 ---
 
-## Phase 3 – Public Wake-Up Helper
+## Phase 3 – Public Wake-Up Helper ✅ Completed
 1.  Add `async def wake_up(self, device_id: str) -> None` to `MieleClient`.
 2.  Implementation: `_put_request(f"/Devices/{quote(device_id)}/State", {"DeviceAction": 2})`.
 3.  Raises `ResponseError` on non-2xx.
@@ -57,7 +57,7 @@ Outcome: Users can wake sleeping appliances.
 
 ---
 
-## Phase 4 – Remote-Start Helper (OPT-IN)
+## Phase 4 – Remote-Start Helper (OPT-IN) ✅ Completed
 1.  Add library-level feature flag:
     ```python
     from asyncmiele.config import settings  # simple dataclass w/ global flags
@@ -74,7 +74,7 @@ Outcome: Remote-start available only when explicitly enabled.
 
 ---
 
-## Phase 5 – Minimal Enum Module
+## Phase 5 – Minimal Enum Module ✅ Completed
 1.  Introduce `asyncmiele.enums` with small sets: `Status`, `ProgramPhase`, `ProgramId`, `DeviceType`.
 2.  Auto-convert when building `DeviceState` but keep raw int fallback.
 3.  Document mapping completeness & contribution guideline.
@@ -83,7 +83,7 @@ Outcome: Human-readable status without magic numbers.
 
 ---
 
-## Phase 6 – Documentation & Examples
+## Phase 6 – Documentation & Examples ✅ Completed
 1.  README:
     * **Activation** instructions (code snippet to enable flag or call kw-arg).
     * Warning box about safety & liability.

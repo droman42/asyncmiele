@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
 from asyncmiele.models.response import MieleResponse
+from asyncmiele.enums import Status as StatusEnum, ProgramPhase as ProgramPhaseEnum, ProgramId as ProgramIdEnum
 
 
 class DeviceIdentification(BaseModel):
@@ -40,9 +41,13 @@ class DeviceState(BaseModel):
     """Model for device state information."""
     
     status: Optional[str] = None
+    status_code: Optional[int] = None
+    status_enum: Optional[StatusEnum] = None
     program_id: Optional[int] = None
     program_type: Optional[str] = None
     program_phase: Optional[str] = None
+    program_phase_code: Optional[int] = None
+    program_phase_enum: Optional[ProgramPhaseEnum] = None
     remaining_time: Optional[int] = None
     start_time: Optional[int] = None
     elapsed_time: Optional[int] = None
@@ -62,11 +67,24 @@ class DeviceState(BaseModel):
             A DeviceState instance
         """
         data = response.to_dict()
+        status_field = data.get("status", {})
         return cls(
-            status=data.get("status", {}).get("value_localized"),
+            status=status_field.get("value_localized") if isinstance(status_field, dict) else None,
+            status_code=status_field.get("value_raw") if isinstance(status_field, dict) else status_field if isinstance(status_field, int) else None,
+            status_enum=(
+                (lambda v: StatusEnum(v) if v in StatusEnum._value2member_map_ else None)(
+                    status_field.get("value_raw") if isinstance(status_field, dict) else status_field
+                )
+            ),
             program_id=data.get("ProgramID"),
             program_type=data.get("programType", {}).get("value_localized"),
             program_phase=data.get("programPhase", {}).get("value_localized"),
+            program_phase_code=data.get("programPhase", {}).get("value_raw"),
+            program_phase_enum=(
+                (lambda v: ProgramPhaseEnum(v) if v in ProgramPhaseEnum._value2member_map_ else None)(
+                    data.get("programPhase", {}).get("value_raw")
+                )
+            ),
             remaining_time=data.get("remainingTime"),
             start_time=data.get("startTime"),
             elapsed_time=data.get("elapsedTime"),

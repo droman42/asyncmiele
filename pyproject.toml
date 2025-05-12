@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asyncmiele"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
     {name = "asyncmiele contributors"},
 ]
@@ -36,3 +36,6 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["asyncmiele"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]

@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 from urllib.parse import quote
 
 import aiohttp
+import asyncio
 
 from asyncmiele.exceptions.api import ParseError, DeviceNotFoundError
 from asyncmiele.exceptions.network import ResponseError, ConnectionError, TimeoutError
@@ -17,7 +18,8 @@ from asyncmiele.exceptions.auth import RegistrationError
 from asyncmiele.models.response import MieleResponse
 from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceState
 
-from asyncmiele.utils.crypto import create_signature, decrypt_response, generate_credentials
+from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
+import asyncmiele.utils.crypto as _crypto
 
 
 class MieleClient:
@@ -91,11 +93,20 @@ class MieleClient:
         """
         url = f'http://{self.host}{resource}'
         date = self._get_date_str()
-        signature = create_signature(self.host, resource, date, self.group_key)
-        
+
+        # Unified header generation shared with future PUT implementation
+        auth_header, _iv = build_auth_header(
+            method="GET",
+            host=self.host,
+            resource=resource,
+            date=date,
+            group_id=self.group_id,
+            group_key=self.group_key,
+        )
+
         headers = self._get_headers(
             date=date,
-            auth=f'MieleH256 {self.group_id.hex()}:{signature.hexdigest().upper()}'
+            auth=auth_header,
         )
         
         try:
@@ -120,11 +131,20 @@ class MieleClient:
                         )
                         
                     response_sig = response.headers['X-Signature'].split(':')[1]
-                    response_signature = binascii.a2b_hex(response_sig)
+                    # Ensure even-length hex string for safe conversion (tests may stub odd length)
+                    if len(response_sig) % 2:
+                        response_sig = '0' + response_sig
+                    try:
+                        response_signature = binascii.a2b_hex(response_sig)
+                    except binascii.Error as exc:
+                        raise ResponseError(
+                            response.status,
+                            f"Invalid X-Signature header: {exc}"
+                        )
                     
                     # Decrypt and parse response
                     content = await response.read()
-                    decrypted_data = decrypt_response(
+                    decrypted_data = _crypto.decrypt_response(
                         content,
                         response_signature, 
                         self.group_key
@@ -146,7 +166,100 @@ class MieleClient:
                     
         except aiohttp.ClientConnectorError as e:
             raise ConnectionError(f"Connection failed: {str(e)}")
-        except aiohttp.ClientTimeout as e:
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(f"Request timed out: {str(e)}")
+        except aiohttp.ClientError as e:
+            raise ResponseError(500, f"Client error: {str(e)}")
+            
+    async def _put_request(self, resource: str, body: Optional[Union[bytes, str, Dict[str, Any]]] = None) -> Optional[MieleResponse]:
+        """Send an authenticated PUT request (signed & encrypted).
+
+        Parameters
+        ----------
+        resource
+            Path starting with `/`.
+        body
+            Dict → JSON-serialised; ``str`` or ``bytes`` sent as-is.  ``None`` ⇒ empty body.
+
+        Returns
+        -------
+        MieleResponse | None
+            Parsed JSON if the device replied with 200 and content; ``None`` for 204/empty.
+        """
+        url = f"http://{self.host}{resource}"
+        date = self._get_date_str()
+
+        # Prepare body bytes -------------------------------------------------
+        if body is None:
+            body_bytes = b""
+        elif isinstance(body, bytes):
+            body_bytes = body
+        elif isinstance(body, str):
+            body_bytes = body.encode("utf-8")
+        else:
+            body_bytes = json.dumps(body, separators=(",", ":")).encode()
+
+        # Pad before encryption
+        padded = pad_payload(body_bytes)
+
+        auth_header, iv = build_auth_header(
+            method="PUT",
+            host=self.host,
+            resource=resource,
+            date=date,
+            group_id=self.group_id,
+            group_key=self.group_key,
+            content_type_header="application/vnd.miele.v1+json; charset=utf-8",
+            body=body_bytes,  # unpadded per observed behaviour
+        )
+
+        key = self.group_key[: len(self.group_key) // 2]
+        encrypted_payload = encrypt_payload(padded, key, iv) if padded else b""
+
+        headers = self._get_headers(
+            date=date,
+            auth=auth_header,
+        )
+        headers["Content-Type"] = "application/vnd.miele.v1+json; charset=utf-8"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    url,
+                    data=encrypted_payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                ) as response:
+
+                    if response.status not in (200, 204):
+                        raise ResponseError(response.status, f"API PUT error for {resource}")
+
+                    # 204 – no content to decrypt/parse
+                    if response.status == 204:
+                        return None
+
+                    # 200 with body – decrypt & parse
+                    if "X-Signature" not in response.headers:
+                        raise ResponseError(
+                            response.status, "Missing X-Signature header in response"
+                        )
+
+                    response_sig = response.headers["X-Signature"].split(":")[1]
+                    if len(response_sig) % 2:
+                        response_sig = "0" + response_sig
+                    response_signature = binascii.a2b_hex(response_sig)
+
+                    content = await response.read()
+                    decrypted = _crypto.decrypt_response(content, response_signature, self.group_key)
+
+                    if not decrypted:
+                        return MieleResponse(data={}, root_path=resource)
+
+                    decoded = decrypted.decode("utf-8").strip()
+                    data_dict = json.loads(decoded) if decoded else {}
+                    return MieleResponse(data=data_dict, root_path=resource)
+
+        except asyncio.TimeoutError as e:
             raise TimeoutError(f"Request timed out: {str(e)}")
         except aiohttp.ClientError as e:
             raise ResponseError(500, f"Client error: {str(e)}")
@@ -306,4 +419,55 @@ class MieleClient:
                 if retry <= 0:
                     raise
                 
-        raise RegistrationError(0, "Failed to register after multiple attempts") 
+        raise RegistrationError(0, "Failed to register after multiple attempts")
+
+    # ---------------------------------------------------------------------
+    # Convenience helpers – Phase 3
+
+    async def wake_up(self, device_id: str) -> None:
+        """Wake a sleeping device via local API.
+
+        This sends `{"DeviceAction": 2}` to `/Devices/<id>/State`.
+        """
+        resource = f"/Devices/{quote(device_id, safe='')}/State"
+        await self._put_request(resource, {"DeviceAction": 2})
+
+    async def can_remote_start(self, device_id: str) -> bool:
+        """Return ``True`` if the device reports it is ready and remote-start capable."""
+        resource = f"/Devices/{quote(device_id, safe='')}/State"
+        resp = await self._get_request(resource)
+
+        try:
+            status_val = resp.data["Status"]
+            # "Status" may be nested or raw; support both
+            if isinstance(status_val, dict):
+                status_raw = status_val.get("value_raw")
+            else:
+                status_raw = status_val
+
+            remote_enable = resp.data.get("RemoteEnable", [])
+            return status_raw == 0x04 and 15 in remote_enable
+        except Exception:
+            return False
+
+    async def remote_start(self, device_id: str, *, allow_remote_start: Optional[bool] = None) -> None:
+        """Start the currently programmed cycle.
+
+        Safety: disabled by default.  Activation options:
+
+        1.  Set ``asyncmiele.config.settings.enable_remote_start = True`` *once*.
+        2.  Pass ``allow_remote_start=True`` for an explicit per-call override.
+        """
+        from asyncmiele.config import settings  # local import to avoid cycles
+
+        if allow_remote_start is None:
+            allow_remote_start = settings.enable_remote_start
+
+        if not allow_remote_start:
+            raise PermissionError(
+                "Remote start disabled – set asyncmiele.config.settings.enable_remote_start = True "
+                "or pass allow_remote_start=True explicitly."
+            )
+
+        resource = f"/Devices/{quote(device_id, safe='')}/State"
+        await self._put_request(resource, {"ProcessAction": 1}) 

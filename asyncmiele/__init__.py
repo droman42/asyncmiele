@@ -5,7 +5,7 @@ This package provides an asynchronous client for communicating with Miele applia
 that support the Miele@Home protocol over a local network connection.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from asyncmiele.api.client import MieleClient
 from asyncmiele.models.device import MieleDevice, DeviceState, DeviceIdentification
@@ -16,6 +16,7 @@ from asyncmiele.exceptions.network import NetworkException, ConnectionError, Tim
 from asyncmiele.exceptions.auth import AuthenticationException, InvalidCredentialsError, AuthorizationError, RegistrationError
 from asyncmiele.utils.crypto import generate_credentials
 from asyncmiele.utils.discovery import discover_devices, get_device_info
+from asyncmiele.enums import Status as StatusEnum, ProgramPhase as ProgramPhaseEnum, ProgramId as ProgramIdEnum, DeviceType as DeviceTypeEnum
 
 
 async def easy_setup(host: str):

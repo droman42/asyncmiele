@@ -201,6 +201,44 @@ async def handle_errors():
 asyncio.run(handle_errors())
 ```
 
+### Waking Up a Device
+
+If a Miele appliance has gone into power-saving "sleep" mode it returns invalid data.  
+Use the `wake_up()` helper to bring it online again:
+
+```python
+await client.wake_up("000123456789")  # device route / ID
+```
+
+This sends `{"DeviceAction": 2}` to the device and usually completes with an empty 204-No-Content response.
+
+### Remote-Start (opt-in)
+
+Starting a program remotely can be dangerous if the appliance is not prepared correctly.  
+For this reason **remote-start is disabled by default**.  Enable it in one of two ways:
+
+```python
+from asyncmiele.config import settings
+settings.enable_remote_start = True        # global once-per-process
+```
+
+or pass an explicit override flag per call:
+
+```python
+await client.remote_start("000123456789", allow_remote_start=True)
+```
+
+Before attempting a start you can check whether the appliance is ready:
+
+```python
+if await client.can_remote_start("000123456789"):
+    await client.remote_start("000123456789", allow_remote_start=True)
+else:
+    print("Device not ready for remote start")
+```
+
+Remote-start issues `{"ProcessAction": 1}` to the `/State` resource.  The device must already have a fully programmed cycle and expose the `RemoteEnable` flag (`15`).
+
 ## Acknowledgments
 
 This project is based on reverse-engineering efforts of the Miele@Home protocol and inspired by the [home-assistant-miele-mobile](https://github.com/thuxnder/home-assistant-miele-mobile) project. It has been refactored to be independent of Home Assistant and provide a clean, asynchronous API.
