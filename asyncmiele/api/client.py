@@ -12,7 +12,11 @@ import aiohttp
 import asyncio
 
 from asyncmiele.exceptions.api import ParseError, DeviceNotFoundError
-from asyncmiele.exceptions.network import ResponseError, ConnectionError, TimeoutError
+from asyncmiele.exceptions.network import (
+    ResponseError,
+    NetworkConnectionError,
+    NetworkTimeoutError,
+)
 from asyncmiele.exceptions.auth import RegistrationError
 
 from asyncmiele.models.response import MieleResponse
@@ -22,6 +26,7 @@ from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad
 import asyncmiele.utils.crypto as _crypto
 from asyncmiele.dop2.models import SFValue, ConsumptionStats
 from asyncmiele.models.summary import DeviceSummary
+from asyncmiele.utils.http_consts import ACCEPT_HEADER, USER_AGENT, CONTENT_TYPE_JSON
 
 
 class MieleClient:
@@ -48,6 +53,14 @@ class MieleClient:
         self.group_key = group_key
         self.timeout = timeout
         
+        # Lazily-instantiated session (Phase-1 persistent connection pool)
+        self._session: aiohttp.ClientSession | None = None
+        
+        # ------------------------------------------------------------------
+        # Internal caches (Phase-4 helpers)
+        # ------------------------------------------------------------------
+        self._consumption_baseline: dict[str, tuple[datetime.date, ConsumptionStats]] = {}
+
     def _get_date_str(self) -> str:
         """Get a formatted date string for API requests."""
         return datetime.datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
@@ -67,8 +80,8 @@ class MieleClient:
             date = self._get_date_str()
             
         headers = {
-            'Accept': 'application/vnd.miele.v1+json',
-            'User-Agent': 'Miele@mobile 2.3.3 Android',
+            'Accept': ACCEPT_HEADER,
+            'User-Agent': USER_AGENT,
             'Host': self.host,
             'Date': date,
         }
@@ -78,6 +91,136 @@ class MieleClient:
             
         return headers
         
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return an open *aiohttp* session, creating it on first use."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the underlying *aiohttp* session (idempotent)."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    # Async-context manager convenience
+    async def __aenter__(self):
+        await self._get_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+
+    # ------------------------------------------------------------------
+    # Unified request implementation
+
+    async def _request_bytes(
+        self,
+        method: str,
+        resource: str,
+        *,
+        body: Optional[Union[bytes, str, Dict[str, Any]]] = None,
+        allowed_status: tuple[int, ...] = (200,),
+    ) -> tuple[int, bytes]:
+        """Low-level request helper that handles signing, (en/de)cryption.
+
+        Returns
+        -------
+        (status_code, decrypted_bytes)
+        """
+
+        method = method.upper()
+
+        # ------------------------------------------------------------------
+        # Prepare raw body bytes (before padding/encryption) – needed for HMAC.
+        # ------------------------------------------------------------------
+        if body is None:
+            body_bytes: bytes = b""
+        elif isinstance(body, bytes):
+            body_bytes = body
+        elif isinstance(body, str):
+            body_bytes = body.encode("utf-8")
+        else:  # assume JSON-serialisable
+            body_bytes = json.dumps(body, separators=(",", ":")).encode()
+
+        date_str = self._get_date_str()
+
+        content_type_header = CONTENT_TYPE_JSON if method == "PUT" else ""
+
+        # Build auth header + IV (IV only needed for PUT encryption)
+        auth_header, iv = build_auth_header(
+            method=method,
+            host=self.host,
+            resource=resource,
+            date=date_str,
+            group_id=self.group_id,
+            group_key=self.group_key,
+            content_type_header=content_type_header,
+            body=body_bytes,
+        )
+
+        # Encrypt payload for PUT
+        if method == "PUT":
+            padded = pad_payload(body_bytes)
+            key = self.group_key[: len(self.group_key) // 2]
+            data_to_send = encrypt_payload(padded, key, iv) if padded else b""
+        else:
+            data_to_send = None  # GET has no body
+
+        # ------------------------------------------------------------------
+        # Build headers & fire request
+        # ------------------------------------------------------------------
+        headers = {
+            "Accept": ACCEPT_HEADER,
+            "User-Agent": USER_AGENT,
+            "Host": self.host,
+            "Date": date_str,
+            "Authorization": auth_header,
+        }
+        if content_type_header:
+            headers["Content-Type"] = content_type_header
+
+        url = f"http://{self.host}{resource}"
+
+        session = await self._get_session()
+
+        try:
+            async with session.request(
+                method,
+                url,
+                data=data_to_send,
+                headers=headers,
+                timeout=self.timeout,
+            ) as resp:
+
+                if resp.status not in allowed_status:
+                    raise ResponseError(resp.status, f"API error for {resource}")
+
+                # 204 – No Content: nothing to decrypt/parse
+                if resp.status == 204:
+                    return resp.status, b""
+
+                # Signature header is mandatory for encrypted responses
+                if "X-Signature" not in resp.headers:
+                    raise ResponseError(resp.status, "Missing X-Signature header in response")
+
+                sig_hex = resp.headers["X-Signature"].split(":")[1]
+                if len(sig_hex) % 2:
+                    sig_hex = "0" + sig_hex
+                sig_bytes = binascii.a2b_hex(sig_hex)
+
+                encrypted_content = await resp.read()
+                decrypted = _crypto.decrypt_response(encrypted_content, sig_bytes, self.group_key)
+
+                return resp.status, decrypted
+
+        except asyncio.TimeoutError as exc:
+            raise NetworkTimeoutError(str(exc))
+        except aiohttp.ClientConnectorError as exc:
+            raise NetworkConnectionError(str(exc))
+        except aiohttp.ClientError as exc:
+            raise ResponseError(500, str(exc))
+
     async def _get_request(self, resource: str) -> MieleResponse:
         """
         Perform an authenticated GET request to the API.
@@ -93,86 +236,19 @@ class MieleClient:
             TimeoutError: If the request times out
             ResponseError: If the server returns an error status
         """
-        url = f'http://{self.host}{resource}'
-        date = self._get_date_str()
+        status, decrypted = await self._request_bytes("GET", resource, allowed_status=(200,))
 
-        # Unified header generation shared with future PUT implementation
-        auth_header, _iv = build_auth_header(
-            method="GET",
-            host=self.host,
-            resource=resource,
-            date=date,
-            group_id=self.group_id,
-            group_key=self.group_key,
-        )
-
-        headers = self._get_headers(
-            date=date,
-            auth=auth_header,
-        )
-        
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, 
-                    headers=headers, 
-                    timeout=self.timeout
-                ) as response:
-                    
-                    if response.status != 200:
-                        raise ResponseError(
-                            response.status,
-                            f"API error for {resource}"
-                        )
-                    
-                    # Extract signature from headers
-                    if 'X-Signature' not in response.headers:
-                        raise ResponseError(
-                            response.status,
-                            "Missing X-Signature header in response"
-                        )
-                        
-                    response_sig = response.headers['X-Signature'].split(':')[1]
-                    # Ensure even-length hex string for safe conversion (tests may stub odd length)
-                    if len(response_sig) % 2:
-                        response_sig = '0' + response_sig
-                    try:
-                        response_signature = binascii.a2b_hex(response_sig)
-                    except binascii.Error as exc:
-                        raise ResponseError(
-                            response.status,
-                            f"Invalid X-Signature header: {exc}"
-                        )
-                    
-                    # Decrypt and parse response
-                    content = await response.read()
-                    decrypted_data = _crypto.decrypt_response(
-                        content,
-                        response_signature, 
-                        self.group_key
-                    )
-                    
-                    try:
-                        if decrypted_data:
-                            decoded = decrypted_data.decode('utf-8')
-                            if decoded:
-                                raw_data = json.loads(decoded)
-                            else:
-                                raw_data = {}
-                        else:
-                            raw_data = {}
-                    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                        raise ParseError(f"Failed to parse response: {str(e)}")
-                    
-                    return MieleResponse(data=raw_data, root_path=resource)
-                    
-        except aiohttp.ClientConnectorError as e:
-            raise ConnectionError(f"Connection failed: {str(e)}")
-        except asyncio.TimeoutError as e:
-            raise TimeoutError(f"Request timed out: {str(e)}")
-        except aiohttp.ClientError as e:
-            raise ResponseError(500, f"Client error: {str(e)}")
-            
+            if decrypted:
+                decoded = decrypted.decode("utf-8").strip()
+                raw_data: Dict[str, Any] = json.loads(decoded) if decoded else {}
+            else:
+                raw_data = {}
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ParseError(f"Failed to parse response: {exc}")
+
+        return MieleResponse(data=raw_data, root_path=resource)
+        
     async def _put_request(self, resource: str, body: Optional[Union[bytes, str, Dict[str, Any]]] = None) -> Optional[MieleResponse]:
         """Send an authenticated PUT request (signed & encrypted).
 
@@ -188,83 +264,19 @@ class MieleClient:
         MieleResponse | None
             Parsed JSON if the device replied with 200 and content; ``None`` for 204/empty.
         """
-        url = f"http://{self.host}{resource}"
-        date = self._get_date_str()
-
-        # Prepare body bytes -------------------------------------------------
-        if body is None:
-            body_bytes = b""
-        elif isinstance(body, bytes):
-            body_bytes = body
-        elif isinstance(body, str):
-            body_bytes = body.encode("utf-8")
-        else:
-            body_bytes = json.dumps(body, separators=(",", ":")).encode()
-
-        # Pad before encryption
-        padded = pad_payload(body_bytes)
-
-        auth_header, iv = build_auth_header(
-            method="PUT",
-            host=self.host,
-            resource=resource,
-            date=date,
-            group_id=self.group_id,
-            group_key=self.group_key,
-            content_type_header="application/vnd.miele.v1+json; charset=utf-8",
-            body=body_bytes,  # unpadded per observed behaviour
+        status, decrypted = await self._request_bytes(
+            "PUT",
+            resource,
+            body=body,
+            allowed_status=(200, 204),
         )
 
-        key = self.group_key[: len(self.group_key) // 2]
-        encrypted_payload = encrypt_payload(padded, key, iv) if padded else b""
+        if status == 204 or not decrypted:
+            return None
 
-        headers = self._get_headers(
-            date=date,
-            auth=auth_header,
-        )
-        headers["Content-Type"] = "application/vnd.miele.v1+json; charset=utf-8"
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
-                    url,
-                    data=encrypted_payload,
-                    headers=headers,
-                    timeout=self.timeout,
-                ) as response:
-
-                    if response.status not in (200, 204):
-                        raise ResponseError(response.status, f"API PUT error for {resource}")
-
-                    # 204 – no content to decrypt/parse
-                    if response.status == 204:
-                        return None
-
-                    # 200 with body – decrypt & parse
-                    if "X-Signature" not in response.headers:
-                        raise ResponseError(
-                            response.status, "Missing X-Signature header in response"
-                        )
-
-                    response_sig = response.headers["X-Signature"].split(":")[1]
-                    if len(response_sig) % 2:
-                        response_sig = "0" + response_sig
-                    response_signature = binascii.a2b_hex(response_sig)
-
-                    content = await response.read()
-                    decrypted = _crypto.decrypt_response(content, response_signature, self.group_key)
-
-                    if not decrypted:
-                        return MieleResponse(data={}, root_path=resource)
-
-                    decoded = decrypted.decode("utf-8").strip()
-                    data_dict = json.loads(decoded) if decoded else {}
-                    return MieleResponse(data=data_dict, root_path=resource)
-
-        except asyncio.TimeoutError as e:
-            raise TimeoutError(f"Request timed out: {str(e)}")
-        except aiohttp.ClientError as e:
-            raise ResponseError(500, f"Client error: {str(e)}")
+        decoded = decrypted.decode("utf-8").strip()
+        data_dict: Dict[str, Any] = json.loads(decoded) if decoded else {}
+        return MieleResponse(data=data_dict, root_path=resource)
             
     async def get_devices(self) -> Dict[str, MieleDevice]:
         """
@@ -423,6 +435,50 @@ class MieleClient:
                 
         raise RegistrationError(0, "Failed to register after multiple attempts")
 
+    # ------------------------------------------------------------------
+    # Phase-3 convenience constructors
+
+    @classmethod
+    def from_hex(
+        cls,
+        host: str,
+        group_id_hex: str,
+        group_key_hex: str,
+        **kwargs,
+    ) -> "MieleClient":
+        """Instantiate a client from *hex* credential strings.
+
+        Example
+        -------
+        >>> cli = MieleClient.from_hex(host, "aabbcc...", "112233...")
+        """
+        return cls(host, bytes.fromhex(group_id_hex), bytes.fromhex(group_key_hex), **kwargs)
+
+    # ------------------------------------------------------------------
+    # Device proxy helper
+
+    async def device(self, device_id: str):
+        """Return an :class:`asyncmiele.appliance.Appliance` proxy for *device_id*."""
+        from asyncmiele.appliance import Appliance  # local import to avoid cycles
+
+        return Appliance(self, device_id)
+
+    # ------------------------------------------------------------------
+    # Batch summaries
+
+    async def get_all_summaries(self) -> Dict[str, "DeviceSummary"]:
+        """Fetch :pyclass:`DeviceSummary` for every known device in parallel."""
+        devices = await self.get_devices()
+        tasks = {dev_id: asyncio.create_task(self.get_summary(dev_id)) for dev_id in devices}
+        results: Dict[str, DeviceSummary] = {}
+        for dev_id, task in tasks.items():
+            try:
+                results[dev_id] = await task
+            except Exception:
+                # Skip failed device but keep others
+                continue
+        return results
+
     # ---------------------------------------------------------------------
     # Convenience helpers – Phase 3
 
@@ -483,41 +539,8 @@ class MieleClient:
 
     async def _get_raw(self, resource: str) -> bytes:
         """Internal helper similar to `_get_request` but returns decrypted *bytes*."""
-        url = f"http://{self.host}{resource}"
-        date = self._get_date_str()
-
-        auth_header, _iv = build_auth_header(
-            method="GET",
-            host=self.host,
-            resource=resource,
-            date=date,
-            group_id=self.group_id,
-            group_key=self.group_key,
-        )
-
-        headers = self._get_headers(date=date, auth=auth_header)
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=self.timeout) as response:
-                    if response.status != 200:
-                        raise ResponseError(response.status, f"API error for {resource}")
-
-                    if "X-Signature" not in response.headers:
-                        raise ResponseError(response.status, "Missing X-Signature header in response")
-
-                    sig_hex = response.headers["X-Signature"].split(":")[1]
-                    if len(sig_hex) % 2:
-                        sig_hex = "0" + sig_hex
-                    sig_bytes = binascii.a2b_hex(sig_hex)
-
-                    content = await response.read()
-                    return _crypto.decrypt_response(content, sig_bytes, self.group_key)
-
-        except asyncio.TimeoutError as e:
-            raise TimeoutError(str(e))
-        except aiohttp.ClientError as e:
-            raise ResponseError(500, str(e))
+        _status, decrypted = await self._request_bytes("GET", resource, allowed_status=(200,))
+        return decrypted
 
     async def dop2_read_leaf(
         self,

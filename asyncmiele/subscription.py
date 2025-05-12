@@ -36,11 +36,25 @@ Callback = Callable[[DeviceSummary, Optional[DeviceSummary]], Awaitable[None] | 
 
 
 class SubscriptionManager:
-    """Poll devices at a fixed interval and dispatch change events."""
+    """Poll devices at a fixed interval and dispatch change events.
 
-    def __init__(self, client: MieleClient, *, interval: float = 30.0) -> None:
+    Parameters
+    ----------
+    on_error
+        Optional callback invoked with *(exc, device_id)* when a listener raises or a
+        fetch fails.  If *None* (default) exceptions are swallowed silently (prev. behaviour).
+    """
+
+    def __init__(
+        self,
+        client: MieleClient,
+        *,
+        interval: float = 30.0,
+        on_error: Callable[[Exception, str], Awaitable[None] | None] | None = None,
+    ) -> None:
         self.client = client
         self.interval = interval
+        self._on_error = on_error
 
         self._listeners: Dict[str, List[Callback]] = {}
         self._current: Dict[str, DeviceSummary] = {}
@@ -112,8 +126,12 @@ class SubscriptionManager:
                 continue
             try:
                 summary = await self.client.get_summary(device_id)
-            except Exception:
+            except Exception as exc:
                 # device unreachable etc; skip but keep previous value
+                if self._on_error:
+                    maybe = self._on_error(exc, device_id)
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
                 continue
 
             old = self._current.get(device_id)
@@ -128,6 +146,9 @@ class SubscriptionManager:
                     result = cb(summary, old)
                     if asyncio.iscoroutine(result):
                         await result
-                except Exception:
-                    # never propagate callback exceptions
+                except Exception as exc:
+                    if self._on_error:
+                        maybe = self._on_error(exc, device_id)
+                        if asyncio.iscoroutine(maybe):
+                            await maybe
                     continue 

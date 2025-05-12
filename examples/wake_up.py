@@ -18,14 +18,12 @@ async def main():
     parser.add_argument("--device", required=True)
     args = parser.parse_args()
 
-    client = MieleClient(
-        host=args.host,
-        group_id=bytes.fromhex(args.group_id),
-        group_key=bytes.fromhex(args.group_key),
-    )
+    client = MieleClient.from_hex(args.host, args.group_id, args.group_key)
 
-    await client.wake_up(args.device)
-    print("Wake-up command sent")
+    async with client:
+        appliance = await client.device(args.device)
+        await appliance.wake_up()
+        print("Wake-up command sent")
 
 
 if __name__ == "__main__":

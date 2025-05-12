@@ -2,13 +2,17 @@
 Discovery utilities for finding Miele devices on the local network.
 """
 
+from __future__ import annotations
+
 import asyncio
 import socket
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncIterator
 
 import aiohttp
 
 from asyncmiele.exceptions.network import NetworkException
+from asyncmiele.api.client import MieleClient
+
 
 
 async def discover_devices(timeout: float = 5.0) -> List[Dict[str, Any]]:
@@ -116,3 +120,27 @@ async def get_device_info(host: str, timeout: float = 5.0) -> Dict[str, Any]:
                     return {'error': f'HTTP Error: {response.status}'}
     except aiohttp.ClientError as e:
         raise NetworkException(f"Failed to retrieve device info: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Convenience shortcut (Phase-3)
+# ---------------------------------------------------------------------------
+
+async def auto_clients(
+    group_id_hex: str,
+    group_key_hex: str,
+    *,
+    timeout: float = 5.0,
+) -> AsyncIterator[MieleClient]:
+    """Discover devices and yield ready :class:`asyncmiele.api.client.MieleClient` instances.
+
+    Example
+    -------
+    >>> async for cli in auto_clients(gid, gkey):
+    ...     print(await cli.get_devices())
+    """
+
+    devices = await discover_devices(timeout)
+    for dev in devices:
+        host = dev.get("host")
+        if host:
+            yield MieleClient.from_hex(host, group_id_hex, group_key_hex, timeout=timeout)

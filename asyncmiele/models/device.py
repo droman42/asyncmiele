@@ -91,6 +91,27 @@ class DeviceState(BaseModel):
             raw_state=data
         )
 
+    # ------------------------------------------------------------------
+    # Convenience properties (Phase-3)
+    # ------------------------------------------------------------------
+
+    @property
+    def status_name(self) -> Optional[str]:
+        """Human-readable name resolving :pyattr:`status_code`."""
+        from asyncmiele.enums import status_name as _status_name  # late import to avoid cycles
+
+        if self.status_code is not None:
+            return _status_name(self.status_code)
+        return None
+
+    @property
+    def program_phase_name(self) -> Optional[str]:
+        """Human-readable name for :pyattr:`program_phase_code`."""
+        from asyncmiele.enums import ProgramPhase as _Phase
+
+        if self.program_phase_code is not None and self.program_phase_code in _Phase._value2member_map_:
+            return _Phase(self.program_phase_code).name
+        return None
 
 class MieleDevice(BaseModel):
     """Model for a Miele device with identification and state."""

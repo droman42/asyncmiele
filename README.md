@@ -133,43 +133,41 @@ async def connect_to_device():
 asyncio.run(connect_to_device())
 ```
 
-### Connecting to Devices
-
-Once you have the credentials, you can connect to your device:
+### Quick-start (new convenience layer)
 
 ```python
 import asyncio
 from asyncmiele import MieleClient
 
-async def get_device_info():
-    # Create client with your stored credentials
-    client = MieleClient(
-        host="192.168.1.123",
-        group_id=bytes.fromhex("your_group_id"),
-        group_key=bytes.fromhex("your_group_key")
-    )
-    
-    # Get all devices
-    devices = await client.get_devices()
-    
-    for device_id, device in devices.items():
-        print(f"Device ID: {device_id}")
-        print(f"Name: {device.name}")
-        print(f"Status: {device.state.status}")
-        
-        if device.state.program_phase:
-            print(f"Program: {device.state.program_type}")
-            print(f"Phase: {device.state.program_phase}")
-            
-        if device.state.remaining_time:
-            print(f"Remaining time: {device.state.remaining_time} seconds")
-            
-    # Get updates for a specific device
-    device = await client.get_device("your_device_id")
-    state = await client.get_device_state("your_device_id")
+# Credentials obtained during registration
+HOST = "192.168.1.123"
+GROUP_ID = "0123456789abcdef"
+GROUP_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+DEVICE_ID = "000123456789"
 
-asyncio.run(get_device_info())
+
+async def main():
+    # from_hex converts the stored hex strings → bytes
+    client = MieleClient.from_hex(HOST, GROUP_ID, GROUP_KEY)
+
+    async with client:  # persistent HTTP session
+        # High-level proxy bound to a single appliance
+        washer = await client.device(DEVICE_ID)
+
+        summary = await washer.summary()
+        print("Progress", summary.progress)
+
+        # Wake up the appliance and start pre-programmed cycle
+        await washer.wake_up()
+        if await washer.can_remote_start():
+            await washer.remote_start(allow_remote_start=True)
+
+
+asyncio.run(main())
 ```
+
+The traditional low-level API (`get_devices`, `wake_up`, `remote_start`, …) is
+still available, but the convenience layer requires far less boilerplate.
 
 ### Error Handling
 
@@ -178,7 +176,7 @@ The library provides detailed exception classes for proper error handling:
 ```python
 import asyncio
 from asyncmiele import MieleClient
-from asyncmiele.exceptions.network import ConnectionError, TimeoutError
+from asyncmiele.exceptions.network import NetworkConnectionError, NetworkTimeoutError
 from asyncmiele.exceptions.api import DeviceNotFoundError
 
 async def handle_errors():
@@ -191,9 +189,9 @@ async def handle_errors():
         
         device = await client.get_device("non_existent_id")
         
-    except ConnectionError as e:
+    except NetworkConnectionError as e:
         print(f"Connection failed: {e}")
-    except TimeoutError as e:
+    except NetworkTimeoutError as e:
         print(f"Request timed out: {e}")
     except DeviceNotFoundError as e:
         print(f"Device not found: {e}")

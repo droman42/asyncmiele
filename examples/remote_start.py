@@ -25,34 +25,33 @@ async def main():
     parser.add_argument("--force", action="store_true", help="Bypass safety flag for start")
     args = parser.parse_args()
 
-    client = MieleClient(
-        host=args.host,
-        group_id=bytes.fromhex(args.group_id),
-        group_key=bytes.fromhex(args.group_key),
-    )
+    client = MieleClient.from_hex(args.host, args.group_id, args.group_key)
 
-    print("Waking up …")
-    await client.wake_up(args.device)
+    async with client:
+        appliance = await client.device(args.device)
 
-    if args.start:
-        print("Checking remote-start capability …")
-        can_start = await client.can_remote_start(args.device)
-        print("can_remote_start =", can_start)
-        if not can_start:
-            print("Device not ready – aborting")
-            return
+        print("Waking up …")
+        await appliance.wake_up()
 
-        if args.force:
-            allow = True
-        else:
-            allow = settings.enable_remote_start
-        if not allow:
-            print("Remote-start disabled. Use --force or enable via settings.")
-            return
+        if args.start:
+            print("Checking remote-start capability …")
+            can_start = await appliance.can_remote_start()
+            print("can_remote_start =", can_start)
+            if not can_start:
+                print("Device not ready – aborting")
+                return
 
-        print("Starting program …")
-        await client.remote_start(args.device, allow_remote_start=True)
-        print("Remote start command sent")
+            if args.force:
+                allow = True
+            else:
+                allow = settings.enable_remote_start
+            if not allow:
+                print("Remote-start disabled. Use --force or enable via settings.")
+                return
+
+            print("Starting program …")
+            await appliance.remote_start(allow_remote_start=True)
+            print("Remote start command sent")
 
 
 if __name__ == "__main__":

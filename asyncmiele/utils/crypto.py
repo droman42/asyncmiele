@@ -5,38 +5,12 @@ Cryptographic utilities for Miele API communication.
 import hmac
 import hashlib
 import binascii
-from typing import Tuple, Union, Dict, Any
+from typing import Tuple, Dict, Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
 from asyncmiele.exceptions.api import DecryptionError
-
-
-def create_signature(
-    host: str,
-    resource: str,
-    date: str,
-    group_key: bytes
-) -> hmac.HMAC:
-    """
-    Create an HMAC signature for Miele API authentication.
-    
-    Args:
-        host: Host address
-        resource: API resource path
-        date: Formatted date string
-        group_key: Authentication group key
-        
-    Returns:
-        HMAC object containing the signature
-    """
-    signature_str = f'GET\n{host}{resource}\n\napplication/vnd.miele.v1+json\n{date}\n'
-    return hmac.new(
-        group_key,
-        bytearray(signature_str.encode('ASCII')),
-        hashlib.sha256
-    )
 
 
 def decrypt_response(
@@ -173,3 +147,38 @@ def encrypt_payload(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     encryptor = cipher.encryptor()
     return encryptor.update(plaintext) + encryptor.finalize() 
+
+# ---------------------------------------------------------------------------
+# Decryption helpers (Phase-2 symmetry)
+# ---------------------------------------------------------------------------
+
+def decrypt_and_unpad(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    """AES-CBC decrypt *ciphertext* and strip trailing ASCII-space padding."""
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    return plaintext.rstrip(b"\x20")
+
+
+def decrypt_response(
+    response_body: bytes,
+    signature: bytes,
+    group_key: bytes,
+) -> bytes:
+    """Decrypt and un-pad API response using AES-CBC.
+
+    Parameters
+    ----------
+    response_body
+        Encrypted payload bytes.
+    signature
+        Hex signature from *X-Signature* header (already binascii-decoded).
+    group_key
+        Full 32-byte group key; encryption uses the first 16 bytes.
+    """
+    try:
+        key = group_key[: len(group_key) // 2]
+        iv = signature[: len(signature) // 2]
+        return decrypt_and_unpad(response_body, key, iv)
+    except Exception as e:  # pragma: no cover – defensive
+        raise DecryptionError(f"Failed to decrypt response: {e}") from e 

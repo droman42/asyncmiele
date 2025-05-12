@@ -6,17 +6,17 @@ from asyncmiele.exceptions import MieleException
 
 
 class NetworkException(MieleException):
-    """Exception raised for network-related errors."""
+    """Base class for network-related errors."""
     pass
 
 
-class ConnectionError(NetworkException):
-    """Exception raised when a connection to a Miele device cannot be established."""
+class NetworkConnectionError(NetworkException):
+    """Raised when a connection to a Miele device cannot be established."""
     pass
 
 
-class TimeoutError(NetworkException):
-    """Exception raised when a request to a Miele device times out."""
+class NetworkTimeoutError(NetworkException):
+    """Raised when a request to a Miele device times out."""
     pass
 
 
@@ -32,4 +32,6 @@ class ResponseError(NetworkException):
         """
         self.status_code = status_code
         self.message = message
-        super().__init__(f"HTTP error {status_code}{': ' + message if message else ''}") 
+        super().__init__(f"HTTP error {status_code}{': ' + message if message else ''}")
+
+# Deprecated aliases removed – library is not yet released. 
