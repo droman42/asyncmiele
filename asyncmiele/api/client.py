@@ -5,7 +5,7 @@ Async client for communicating with Miele devices.
 import json
 import datetime
 import binascii
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Dict, Any, Optional, Union, Tuple
 from urllib.parse import quote
 
 import aiohttp
@@ -20,6 +20,7 @@ from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceSt
 
 from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
 import asyncmiele.utils.crypto as _crypto
+from asyncmiele.dop2.models import SFValue
 
 
 class MieleClient:
@@ -470,4 +471,123 @@ class MieleClient:
             )
 
         resource = f"/Devices/{quote(device_id, safe='')}/State"
-        await self._put_request(resource, {"ProcessAction": 1}) 
+        await self._put_request(resource, {"ProcessAction": 1})
+
+    # ---------------------------------------------------------------------
+    # Phase 8 – DOP2 raw access
+
+    @staticmethod
+    def _dop2_path(device_id: str, unit: int, attribute: int, idx1: int, idx2: int) -> str:
+        return f"/Devices/{quote(device_id, safe='')}/DOP2/{unit}/{attribute}?idx1={idx1}&idx2={idx2}"
+
+    async def _get_raw(self, resource: str) -> bytes:
+        """Internal helper similar to `_get_request` but returns decrypted *bytes*."""
+        url = f"http://{self.host}{resource}"
+        date = self._get_date_str()
+
+        auth_header, _iv = build_auth_header(
+            method="GET",
+            host=self.host,
+            resource=resource,
+            date=date,
+            group_id=self.group_id,
+            group_key=self.group_key,
+        )
+
+        headers = self._get_headers(date=date, auth=auth_header)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=self.timeout) as response:
+                    if response.status != 200:
+                        raise ResponseError(response.status, f"API error for {resource}")
+
+                    if "X-Signature" not in response.headers:
+                        raise ResponseError(response.status, "Missing X-Signature header in response")
+
+                    sig_hex = response.headers["X-Signature"].split(":")[1]
+                    if len(sig_hex) % 2:
+                        sig_hex = "0" + sig_hex
+                    sig_bytes = binascii.a2b_hex(sig_hex)
+
+                    content = await response.read()
+                    return _crypto.decrypt_response(content, sig_bytes, self.group_key)
+
+        except asyncio.TimeoutError as e:
+            raise TimeoutError(str(e))
+        except aiohttp.ClientError as e:
+            raise ResponseError(500, str(e))
+
+    async def dop2_read_leaf(
+        self,
+        device_id: str,
+        unit: int,
+        attribute: int,
+        *,
+        idx1: int = 0,
+        idx2: int = 0,
+    ) -> bytes:
+        """Return decrypted raw bytes of a DOP2 leaf."""
+        path = self._dop2_path(device_id, unit, attribute, idx1, idx2)
+        return await self._get_raw(path)
+
+    async def dop2_write_leaf(
+        self,
+        device_id: str,
+        unit: int,
+        attribute: int,
+        payload: bytes,
+        *,
+        idx1: int = 0,
+        idx2: int = 0,
+    ) -> None:
+        """Write raw *payload* to a DOP2 leaf."""
+        path = self._dop2_path(device_id, unit, attribute, idx1, idx2)
+        await self._put_request(path, payload)
+
+    async def dop2_get_parsed(
+        self,
+        device_id: str,
+        unit: int,
+        attribute: int,
+        *,
+        idx1: int = 0,
+        idx2: int = 0,
+    ) -> Any:
+        """Return parsed representation of a DOP2 leaf using dop2.parser."""
+        raw = await self.dop2_read_leaf(device_id, unit, attribute, idx1=idx1, idx2=idx2)
+        from asyncmiele.dop2.parser import parse_leaf
+
+        return parse_leaf(unit, attribute, raw)
+
+    # ---------------------------------------------------------------------
+    # Phase 10 – Settings helper via SF_Value (simplified)
+
+    async def get_setting(self, device_id: str, sf_id: int) -> SFValue:
+        """Return the `SFValue` for **sf_id** by reading leaf 2/105 with idx1."""
+        parsed = await self.dop2_get_parsed(device_id, 2, 105, idx1=sf_id, idx2=0)
+        if not isinstance(parsed, SFValue):
+            raise ValueError("Leaf did not return SFValue structure")
+        return parsed
+
+    async def set_setting(self, device_id: str, sf_id: int, new_value: int) -> None:
+        """Write **new_value** to setting *sf_id* using leaf 2/105.
+
+        This is *experimental* and assumes simple payload structure:
+            <sf_id:u16> <new_value:u16>
+        padded to blocksize 16.
+        """
+        sf = await self.get_setting(device_id, sf_id)
+
+        if not (sf.minimum <= new_value <= sf.maximum):
+            raise ValueError(f"Value {new_value} outside allowed range {sf.range}")
+
+        payload = bytes([
+            (sf_id >> 8) & 0xFF,
+            sf_id & 0xFF,
+            (new_value >> 8) & 0xFF,
+            new_value & 0xFF,
+        ])
+
+        # DOP2 requires 16-byte block padding/ encryption handled by _put_request
+        await self.dop2_write_leaf(device_id, 2, 105, payload, idx1=sf_id, idx2=0) 

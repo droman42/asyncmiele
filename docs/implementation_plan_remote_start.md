@@ -94,14 +94,14 @@ Outcome: Clear, discoverable usage guidance.
 
 ---
 
-## Phase 7 – Release Tasks
+## Phase 7 – Release Tasks ✅ Completed
 1.  Bump version `x.y.0 → x.(y+1).0`.
 2.  Update `CHANGELOG.md`.
 3.  Ensure all tests/pass.
 
 ---
 
-## Phase 8 – DOP2 Foundation (Raw Access)
+## Phase 8 – DOP2 Foundation (Raw Access) ✅ Completed
 **Objective:** expose low-level DOP2 read/write without any heavy parsing so power-users and external tools can experiment immediately.
 
 Steps
@@ -117,7 +117,7 @@ Outcome: Users can poke any DOP2 leaf; foundation reused by higher-level decoder
 
 ---
 
-## Phase 9 – Structured DOP2 Decoder (Core Annotators)
+## Phase 9 – Structured DOP2 Decoder (Core Annotators) ✅ Completed
 **Objective:** parse a subset of frequently useful leaves into pydantic models for ergonomic consumption.
 
 Steps
@@ -134,7 +134,7 @@ Outcome: Consumers get Pythonic objects without touching bytes.
 
 ---
 
-## Phase 10 – Device Settings Helper (SF Values)
+## Phase 10 – Device Settings Helper (SF Values) ✅ Completed
 **Objective:** expose high-level getters / setters for common settings (language, buzzer, water hardness, …).
 
 Steps
