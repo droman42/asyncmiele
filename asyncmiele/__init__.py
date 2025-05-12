@@ -18,6 +18,10 @@ from asyncmiele.utils.crypto import generate_credentials
 from asyncmiele.utils.discovery import discover_devices, get_device_info
 from asyncmiele.enums import Status as StatusEnum, ProgramPhase as ProgramPhaseEnum, ProgramId as ProgramIdEnum, DeviceType as DeviceTypeEnum
 
+# Phase-14 re-exports -------------------------------------------------------
+from asyncmiele.programs import ProgramCatalog, build_dop2_selection
+from asyncmiele.dop2.models import ConsumptionStats, TariffConfig
+from asyncmiele.subscription import SubscriptionManager
 
 async def easy_setup(host: str):
     """

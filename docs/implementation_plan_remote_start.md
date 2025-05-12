@@ -199,8 +199,8 @@ Outcome: richer Enum coverage and icon meta-data, still offline.
 
 ---
 
-## Optional Phase 14 – Static Program Catalogue & Option Builder
-*Depends on Phase 13; again re-scan *pymiele* before starting.*
+## Optional Phase 14 – Static Program Catalogue & Option Builder ✅ Completed
+*Status: completed – catalogue JSONs imported and option builder helpers are now part of the codebase.*
 
 Context
 :  *pymiele* bundles JSON catalogues describing every selectable program per device.  Locally we can ship the same catalogues and translate chosen program & options into the correct DOP2 `PS_SELECT` payload.
@@ -216,7 +216,7 @@ Outcome: users can enumerate and prepare programs offline; execution still trave
 
 ---
 
-## Optional Phase 15 – Consumption & Statistics Models
+## Optional Phase 15 – Consumption & Statistics Models ✅ Completed
 *Requires Phases 9 & 14.*
 
 Context
@@ -231,7 +231,7 @@ Outcome: feature parity with cloud integration for statistics dashboards.
 
 ---
 
-## Optional Phase 16 – Event Dispatcher / Subscription API
+## Optional Phase 16 – Event Dispatcher / Subscription API ✅ Completed
 
 Context
 :  *pymiele* implements a callback dispatcher that minimises traffic and delivers per-property change events to Home-Assistant.  We can replicate that logic for local polling.

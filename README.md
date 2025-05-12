@@ -239,6 +239,52 @@ else:
 
 Remote-start issues `{"ProcessAction": 1}` to the `/State` resource.  The device must already have a fully programmed cycle and expose the `RemoteEnable` flag (`15`).
 
+## Dumping a programme catalogue from a live appliance 🔧
+
+Phase 14 adds a small helper script that can pull the static programme/option list
+straight out of a LAN-paired appliance and write it into the JSON format used by
+`asyncmiele.programs.ProgramCatalog`.
+
+```
+python scripts/dump_program_catalog.py \
+       --host 192.168.6.126 \
+       --device-id 000123456789 \
+       --group-id aabbccddeeff00112233445566778899 \
+       --group-key 0123456789abcdeffedcba9876543210
+```
+
+Arguments
+
+* `--host`      IP address (or mDNS name) of the appliance on your LAN.
+* `--device-id` 12-digit identifier printed on the pairing sticker (same one you
+  use with `client.remote_start()`).
+* `--group-id`  32-character hex string for the **GroupID** obtained during
+  pairing.
+* `--group-key` 32-character hex string for the **GroupKey** (AES key).
+
+Optional flags
+
+* `--wake`  Send a *wake-up* PUT before reading (useful if the machine is in
+  stand-by).
+* `--out`   Custom output path; default is
+  `resources/programs/<device_type>.json` where `<device_type>` is resolved
+  automatically from the device's */Ident* information.
+
+How it works
+
+1. Queries `/Devices/<id>/Ident` to discover the device-type string.
+2. Reads three DOP2 leaves:
+   * `14/1570` – **PC_ListConfig**: list of programmes.
+   * `14/1571` – **PC_ListItem**  : option list for each programme.
+   * `14/2570` – string table used by the two leaves.
+3. Decodes the binary structures, resolves human-readable strings and writes
+   the resulting Python objects as pretty-printed JSON.
+
+After running the command you will find something like
+`resources/programs/washing_machine.json`; this file is picked up automatically
+by `ProgramCatalog.for_device()` and by the *select
+a programme* example in `examples/select_program.py`.
+
 ## Acknowledgments
 
 This project is based on reverse-engineering efforts of the Miele@Home protocol and inspired by the [home-assistant-miele-mobile](https://github.com/thuxnder/home-assistant-miele-mobile) project. It has been refactored to be independent of Home Assistant and provide a clean, asynchronous API.

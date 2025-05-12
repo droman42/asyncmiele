@@ -20,7 +20,7 @@ from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceSt
 
 from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
 import asyncmiele.utils.crypto as _crypto
-from asyncmiele.dop2.models import SFValue
+from asyncmiele.dop2.models import SFValue, ConsumptionStats
 from asyncmiele.models.summary import DeviceSummary
 
 
@@ -640,4 +640,51 @@ class MieleClient:
             combined_state=combined,
             progress=progress,
             ready_to_start=ready,
+        )
+
+    # ---------------------------------------------------------------------
+    # Phase 15 – Consumption statistics helper
+
+    async def get_consumption_stats(self, device_id: str) -> ConsumptionStats:
+        """Return cumulative consumption counters for *device_id*.
+
+        This helper fetches leaves 2/119 (hours-of-operation) and 2/138 (cycle counter).
+        If a leaf is missing or cannot be parsed the corresponding field is ``None``.
+        """
+        hrs_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 119))
+        cyc_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 138))
+        totals_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 6195))
+
+        hours: int | None = None
+        cycles: int | None = None
+        energy_wh: int | None = None
+        water_l: int | None = None
+
+        try:
+            res = await hrs_task
+            if isinstance(res, int):
+                hours = res
+        except Exception:
+            pass
+
+        try:
+            res = await cyc_task
+            if isinstance(res, int):
+                cycles = res
+        except Exception:
+            pass
+
+        try:
+            res = await totals_task
+            if isinstance(res, dict):
+                energy_wh = res.get("energy_wh_total")
+                water_l = res.get("water_l_total")
+        except Exception:
+            pass
+
+        return ConsumptionStats(
+            hours_of_operation=hours,
+            cycles_completed=cycles,
+            energy_wh_total=energy_wh,
+            water_l_total=water_l,
         ) 
