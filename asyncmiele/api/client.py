@@ -21,6 +21,7 @@ from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceSt
 from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
 import asyncmiele.utils.crypto as _crypto
 from asyncmiele.dop2.models import SFValue
+from asyncmiele.models.summary import DeviceSummary
 
 
 class MieleClient:
@@ -590,4 +591,53 @@ class MieleClient:
         ])
 
         # DOP2 requires 16-byte block padding/ encryption handled by _put_request
-        await self.dop2_write_leaf(device_id, 2, 105, payload, idx1=sf_id, idx2=0) 
+        await self.dop2_write_leaf(device_id, 2, 105, payload, idx1=sf_id, idx2=0)
+
+    # ---------------------------------------------------------------------
+    # Phase 11 – Summary helper
+
+    async def get_summary(self, device_id: str) -> DeviceSummary:
+        """Return a consolidated overview for *device_id*."""
+        ident_task = asyncio.create_task(self.get_device_ident(device_id))
+        state_task = asyncio.create_task(self.get_device_state(device_id))
+
+        combined_state_task = asyncio.create_task(
+            self.dop2_get_parsed(device_id, 2, 256)
+        )
+
+        ready_task = asyncio.create_task(self.can_remote_start(device_id))
+
+        ident = await ident_task
+        state = await state_task
+
+        combined = None
+        try:
+            parsed = await combined_state_task
+            from asyncmiele.dop2.models import DeviceCombinedState
+
+            if isinstance(parsed, DeviceCombinedState):
+                combined = parsed
+        except Exception:
+            pass  # leaf may be absent
+
+        # progress calculation
+        progress = None
+        if state.remaining_time and state.elapsed_time is not None:
+            try:
+                total = state.remaining_time + state.elapsed_time
+                if total > 0:
+                    progress = state.elapsed_time / total
+            except Exception:
+                pass
+
+        ready = await ready_task
+
+        return DeviceSummary(
+            id=device_id,
+            name=ident.device_name or ident.tech_type,
+            ident=ident,
+            state=state,
+            combined_state=combined,
+            progress=progress,
+            ready_to_start=ready,
+        ) 

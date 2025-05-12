@@ -149,7 +149,7 @@ Outcome: Safe manipulation of settings through simple API.
 
 ---
 
-## Phase 11 – Summary Helper & Progress Calculation
+## Phase 11 – Summary Helper & Progress Calculation ✅ Completed
 1.  Combine `/Devices/<id>/Ident` + `/State` + `dop2_get_parsed(DeviceState)`.
 2.  Compute: elapsed / remaining minutes, progress %, remote-start capability, friendly enums.
 3.  Expose as `async def get_summary(self, device_id) -> DeviceSummary` (pydantic).
@@ -159,7 +159,7 @@ Outcome: One-stop high-level status snapshot for UI integrations.
 
 ---
 
-## Phase 12 – Advanced DOP2 (Future Work)
+## Phase 12 – Advanced DOP2 (Future Work) ⏭ Skipped for now
 * Firmware file upload (`FileWrite` leaves).
 * SuperVision list management.
 * OTA update monitoring.
