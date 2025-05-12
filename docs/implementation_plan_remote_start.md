@@ -168,8 +168,22 @@ These are out of current scope; revisit after real-world demand.
 
 ---
 
-## Optional Phase 13 – Enum & Icon Import from *pymiele*
-*Status: optional – requires re-confirming upstream repository state before execution.*
+## Future Work – Additional Ideas from MieleRESTServer (un-scheduled)
+The items below exist in the reference server but are **not** mapped to any current phase (13-16).  They can be broken out into new phases later if demand arises.
+
+* SuperVision list support (decode `SV_ListConfig` 14/1570 and `SV_ListItem` 14/1571; expose helper to edit list, act as time-master).
+* Firmware upload pipeline via `FT_FileWrite` leaves (unit 15/1590) including chunked transfer, CRC verification, and progress callback.
+* Device notification acknowledgement (`2/138`) beyond simple counter read – provide `acknowledge_notification()` helper.
+* ActuatorData / SensorData live telemetry decoders for diagnostic dashboards.
+* Extended program selection GUI helper (translate ProgramCatalog into interactive wizard similar to server's "frontend TODO").
+* Error log / service mode leaves (`GLOBAL_NTFCTN_Show`, etc.) for maintenance apps.
+
+These will require deeper understanding of DOP2 structs and additional safety considerations; revisit after real-world adoption.
+
+---
+
+## Phase 13 – Enum & Icon Import from *pymiele* ✅ Completed
+*Status: completed – extractor script (`scripts/extract_pymiele_consts.py`) and generated `resources/enums.json` are now part of the codebase.*
 
 Context
 :  The MIT-licensed `const.py` (or similar) tables in [pymiele](https://github.com/nordicopen/pymiele) already map raw numeric codes to human-readable names, icons, and units.  Re-using them (via JSON resources, **not** cloud calls) will enrich our `asyncmiele.enums` and improve UI integrations.
@@ -206,11 +220,11 @@ Outcome: users can enumerate and prepare programs offline; execution still trave
 *Requires Phases 9 & 14.*
 
 Context
-:  DOP2 leaves already expose hours-of-operation, cycle counters, energy/water totals.  *pymiele*’s models and calculations (cost estimate) are cloud-agnostic and can be reused.
+:  DOP2 leaves already expose hours-of-operation, cycle counters, energy/water totals.  *pymiele*'s models and calculations (cost estimate) are cloud-agnostic and can be reused.
 
 Steps
 1.  Decode leaves `2/119`, `2/138`, others into `ConsumptionStats` model.
-2.  Mirror *pymiele*’s cost calculation helper but drive it with user-supplied tariff config.
+2.  Mirror *pymiele*'s cost calculation helper but drive it with user-supplied tariff config.
 3.  Unit tests with fixture binaries and golden outputs.
 
 Outcome: feature parity with cloud integration for statistics dashboards.
