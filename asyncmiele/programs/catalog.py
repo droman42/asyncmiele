@@ -118,14 +118,104 @@ class ProgramCatalog(BaseModel):
         return cls._RESOURCE_BASE / filename
 
     @classmethod
-    def for_device(cls, device_ident) -> "ProgramCatalog":
+    def from_dict(cls, data: dict) -> "ProgramCatalog":
+        """Create a program catalog directly from a dictionary.
+        
+        This method allows creating a catalog without needing to first write
+        the data to a JSON file. The dictionary structure must match the expected
+        schema used in the JSON catalog files.
+        
+        Parameters
+        ----------
+        data : dict
+            Dictionary containing device_type and programs information
+            
+        Returns
+        -------
+        ProgramCatalog
+            Initialized catalog instance
+            
+        Raises
+        ------
+        ValueError
+            If the dictionary doesn't have the required structure
+        
+        Example
+        -------
+        >>> catalog_data = {
+        ...     "device_type": "washing_machine",
+        ...     "programs": [
+        ...         {
+        ...             "id": 1,
+        ...             "name": "Cottons",
+        ...             "options": [
+        ...                 {
+        ...                     "id": 10,
+        ...                     "name": "Temperature",
+        ...                     "default": 40,
+        ...                     "allowed_values": [20, 30, 40, 60, 90]
+        ...                 }
+        ...             ]
+        ...         }
+        ...     ]
+        ... }
+        >>> catalog = ProgramCatalog.from_dict(catalog_data)
+        """
+        # Validate required fields
+        if not isinstance(data, dict):
+            raise ValueError("Data must be a dictionary")
+            
+        if "device_type" not in data:
+            raise ValueError("Dictionary must contain 'device_type' field")
+            
+        if "programs" not in data:
+            raise ValueError("Dictionary must contain 'programs' field")
+        
+        # Use Pydantic's built-in validation to validate the structure
+        return cls.model_validate(data)
+
+    @classmethod
+    def for_device(cls, device_ident, custom_catalog: dict = None) -> "ProgramCatalog":
         """Load catalogue for *device_ident* (flexible argument).
 
         *device_ident* can be:
             • *str*: name such as "WashingMachine" or tech-type string.
             • *int*: numeric :class:`asyncmiele.enums.DeviceType` value.
             • :class:`asyncmiele.models.device.DeviceIdentification` instance.
+            
+        Parameters
+        ----------
+        device_ident : str, int, or DeviceIdentification
+            Device identification to determine which catalog to load
+        custom_catalog : dict, optional
+            If provided, a custom catalog dictionary that will be used instead
+            of loading from a file
+            
+        Returns
+        -------
+        ProgramCatalog
+            Loaded catalog for the device
+            
+        Raises
+        ------
+        ValueError
+            If device_ident is invalid or catalog file is not found
         """
+        # If a custom catalog is provided, use it directly
+        if custom_catalog is not None:
+            # If the custom catalog has a device_type, make sure it matches
+            if (isinstance(device_ident, str) and 
+                "device_type" in custom_catalog and 
+                custom_catalog["device_type"].lower() != device_ident.lower()):
+                # Log a warning but still use the provided catalog
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Custom catalog device_type '{custom_catalog['device_type']}' "
+                    f"doesn't match requested device_type '{device_ident}'"
+                )
+                
+            return cls.from_dict(custom_catalog)
+            
         # ------------------------------------------------------------------
         # Resolve *device_type* string from the heterogeneous argument.
         # ------------------------------------------------------------------
