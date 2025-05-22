@@ -1,18 +1,40 @@
 """
-Asyncmiele - Async Python client for Miele@Home devices.
-
-This package provides an asynchronous client for communicating with Miele appliances
-that support the Miele@Home protocol over a local network connection.
+AsyncMiele: Async client for Miele home appliances.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
+__author__ = "droman42"
+
+from asyncmiele.api import MieleClient, MieleSetupClient
+from asyncmiele.capabilities import DeviceCapability
+from asyncmiele.models.device_profile import DeviceProfile
+from asyncmiele.models.credentials import MieleCredentials
+from asyncmiele.models.device_config import MieleDeviceConfig
+from asyncmiele.appliance import Appliance
+from asyncmiele.connection import ConnectionManager, ConnectionPool, ConnectionHealthMonitor, DeviceResetter
+from asyncmiele.connection.health import ConnectionState
+
+__all__ = [
+    'MieleClient',
+    'MieleSetupClient',
+    'DeviceCapability',
+    'DeviceProfile',
+    'MieleCredentials',
+    'MieleDeviceConfig',
+    'Appliance',
+    'ConnectionManager',
+    'ConnectionPool',
+    'ConnectionHealthMonitor',
+    'DeviceResetter',
+    'ConnectionState',
+]
 
 from asyncmiele.api.client import MieleClient
 from asyncmiele.models.device import MieleDevice, DeviceState, DeviceIdentification
 from asyncmiele.models.response import MieleResponse
 from asyncmiele.exceptions import MieleException
 from asyncmiele.exceptions.api import APIException, DeviceNotFoundError, DecryptionError, ParseError
-from asyncmiele.exceptions.network import NetworkException, ConnectionError, TimeoutError, ResponseError
+from asyncmiele.exceptions.network import NetworkException, NetworkConnectionError, NetworkTimeoutError, ResponseError
 from asyncmiele.exceptions.auth import AuthenticationException, InvalidCredentialsError, AuthorizationError, RegistrationError
 from asyncmiele.utils.crypto import generate_credentials
 from asyncmiele.utils.discovery import discover_devices, get_device_info

@@ -16,6 +16,9 @@ from typing import Any, Dict, Iterable, List, Optional, TypedDict, Callable, Awa
 from asyncmiele.api.client import MieleClient
 from asyncmiele.models.summary import DeviceSummary
 from asyncmiele.programs import ProgramCatalog, build_dop2_selection
+from asyncmiele.capabilities import DeviceCapability, detector
+from asyncmiele.exceptions.config import UnsupportedCapabilityError
+from asyncmiele.models.device_profile import DeviceProfile
 
 __all__: Iterable[str] = ["Appliance", "ApplianceError", "ProgramError", "ApplianceConnectionError", 
                          "Credentials", "SimulationMode"]
@@ -78,7 +81,8 @@ class Appliance:
 
     def __init__(self, client: MieleClient, device_id: str, *, 
                  simulation_mode: str = SimulationMode.DISABLED,
-                 custom_catalog: Dict[str, Any] = None) -> None:  # noqa: D401
+                 custom_catalog: Dict[str, Any] = None,
+                 device_profile: Optional[DeviceProfile] = None) -> None:  # noqa: D401
         """Initialize an appliance proxy for a specific device.
         
         Parameters
@@ -91,17 +95,21 @@ class Appliance:
             Simulation mode for testing (default: disabled)
         custom_catalog : Dict[str, Any], optional
             Custom program catalog dictionary to use instead of loading from files
+        device_profile : DeviceProfile, optional
+            Device profile containing configuration and capability information
         """
         self._client = client
         self.id = device_id
         self._connected = True  # Assume initially connected
         self._simulation_mode = simulation_mode
         self._custom_catalog = custom_catalog
+        self._device_profile = device_profile
         
         # Device capabilities and info cache
         self._capabilities: Optional[Dict[str, Any]] = None
         self._settings: Optional[Dict[str, Any]] = None
         self._connection_details: Optional[Dict[str, Any]] = None
+        self._detected_capabilities: Optional[DeviceCapability] = None
         
         # Cache management
         self._cache: Dict[str, Any] = {}
@@ -230,7 +238,15 @@ class Appliance:
                 return
                 
         try:
+            # Check capability first
+            if self._device_profile:
+                if not self._device_profile.has_capability(DeviceCapability.WAKE_UP):
+                    logger.warning(f"Device {self.id} does not support wake_up")
+                    return
+            
             await self._with_retry(lambda: self._client.wake_up(self.id))
+        except UnsupportedCapabilityError:
+            logger.warning(f"Device {self.id} does not support wake_up")
         except Exception as exc:
             raise ApplianceConnectionError(f"Failed to wake up appliance: {exc}") from exc
 
@@ -252,15 +268,25 @@ class Appliance:
         if self._simulation_mode != SimulationMode.DISABLED:
             sim_result = self._simulate_response("remote_start")
             if sim_result is not None:
-                self._invalidate_cache()
                 return
-                
+        
         try:
-            await self._with_retry(lambda: self._client.remote_start(self.id, allow_remote_start=allow_remote_start))
-            # Invalidate cache after state change
-            self._invalidate_cache()
+            # Check capability first
+            if self._device_profile:
+                if not self._device_profile.has_capability(DeviceCapability.REMOTE_START):
+                    raise UnsupportedCapabilityError(f"Device {self.id} does not support remote_start")
+            
+            await self._with_retry(lambda: self._client.remote_start(
+                self.id, allow_remote_start=allow_remote_start
+            ))
+            
+            # Invalidate cache for state
+            self._invalidate_cache("state")
+            self._invalidate_cache("can_remote_start")
+        except UnsupportedCapabilityError:
+            raise ProgramError(f"Remote start not supported by device {self.id}")
         except Exception as exc:
-            raise ProgramError(f"Failed to start program: {exc}") from exc
+            raise ApplianceConnectionError(f"Failed to remote start: {exc}") from exc
 
     async def set_setting(self, sf_id: int, value: int) -> None:
         """Write a *Simple Feature* value via leaf 2/105.
@@ -291,52 +317,109 @@ class Appliance:
             raise ApplianceConnectionError(f"Failed to set setting: {exc}") from exc
 
     async def start_program(self, program_name: str, options: Optional[Dict[int, int]] = None) -> None:
-        """Select *program_name* with *options* and start execution.
-
-        Steps
-        -----
-        1. Resolve program info through `ProgramCatalog`.
-        2. Build selection payload and write to PS_SELECT (unit 2/attr 300).
-        3. Trigger `remote_start()`.
+        """Start a program with the given options.
         
         Parameters
         ----------
         program_name : str
             Name of the program to start
         options : Dict[int, int], optional
-            Program options to set (option_id -> value)
+            Dictionary mapping option IDs to values
             
         Raises
         ------
-        ValueError
-            If the program name is unknown
         ProgramError
             If the program cannot be started
         ApplianceConnectionError
             If communication with the appliance fails
         """
+        if self._simulation_mode != SimulationMode.DISABLED:
+            sim_result = self._simulate_response("start_program")
+            if sim_result is not None:
+                return
+        
+        # Check capabilities first
+        await self._check_program_capabilities()
+                
         try:
-            ident = await self._client.get_device_ident(self.id)
-            # Use custom catalog if available
-            catalog = ProgramCatalog.for_device(ident, custom_catalog=self._custom_catalog)
-
-            try:
-                program = catalog.programs_by_name[program_name]
-            except KeyError as exc:
-                raise ValueError(
-                    f"Unknown program '{program_name}' for device type '{catalog.device_type}'"
-                ) from exc
-
-            payload = build_dop2_selection(program, options)
-            await self._client.dop2_write_leaf(self.id, 2, 300, payload)
-            await self.remote_start(allow_remote_start=True)
-            # Cache is already invalidated by remote_start
-        except ValueError:
-            raise
+            # Find the program by name
+            programs = await self.get_available_programs()
+            program = None
+            
+            for p in programs:
+                if p.get("name") == program_name:
+                    program = p
+                    break
+                    
+            if program is None:
+                raise ProgramError(f"Program '{program_name}' not found")
+                
+            # Build the selection command
+            program_id = program["id"]
+            
+            # Get available options for this program
+            program_options = await self.get_program_options(program_name)
+            
+            # Create selection structure
+            selection = build_dop2_selection(program_id, options or {})
+            
+            # Wake up device first if needed
+            if await self.has_capability(DeviceCapability.WAKE_UP):
+                try:
+                    await self.wake_up()
+                    # Wait a bit after wake-up
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Wake-up failed but continuing: {e}")
+            
+            # Check if we need to enable remote start
+            if await self.has_capability(DeviceCapability.REMOTE_START):
+                try:
+                    can_start = await self.can_remote_start()
+                    if not can_start:
+                        await self.remote_start(allow_remote_start=True)
+                        # Wait a bit after enabling remote start
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Remote start enable failed but continuing: {e}")
+            
+            # Send the selection
+            await self._client.dop2_write_leaf(self.id, 14, 1536, selection)
+            
+            # Start the program
+            await self.remote_start()
+            
+            # Invalidate cached state
+            self._invalidate_cache("state")
+            
         except Exception as exc:
-            if isinstance(exc, ProgramError):
-                raise
             raise ProgramError(f"Failed to start program '{program_name}': {exc}") from exc
+
+    async def _check_program_capabilities(self) -> None:
+        """Check if the device supports program selection and raise an error if not.
+        
+        Raises
+        ------
+        ProgramError
+            If the device does not support program selection
+        """
+        program_capabilities = [
+            DeviceCapability.PROGRAM_CATALOG,
+            DeviceCapability.PROGRAM_SELECTION
+        ]
+        
+        # Check if any of the required capabilities are missing
+        missing_capabilities = []
+        
+        for capability in program_capabilities:
+            if not await self.has_capability(capability):
+                missing_capabilities.append(capability.name)
+        
+        if missing_capabilities:
+            raise ProgramError(
+                f"Device {self.id} does not support program operations. "
+                f"Missing capabilities: {', '.join(missing_capabilities)}"
+            )
 
     # ------------------------------------------------------------------
     # Basic functionality from Phase 1
@@ -453,12 +536,12 @@ class Appliance:
             raise ProgramError(f"Failed to cancel program: {exc}") from exc
 
     async def get_available_programs(self) -> List[Dict[str, Any]]:
-        """Return a list of available programs for this appliance.
+        """Get a list of available programs for this appliance.
         
         Returns
         -------
         List[Dict[str, Any]]
-            Information about each available program
+            List of programs with their options
             
         Raises
         ------
@@ -466,26 +549,46 @@ class Appliance:
             If communication with the appliance fails
         """
         # Check cache first
-        cached_programs = self._get_cached("programs")
+        cached_programs = self._get_cached("available_programs")
         if cached_programs is not None:
             return cached_programs
             
+        # Check capabilities
+        if not await self.has_capability(DeviceCapability.PROGRAM_CATALOG):
+            logger.warning(f"Device {self.id} does not support program catalog")
+            return []
+        
         try:
+            # Try to load from custom catalog if provided
+            if self._custom_catalog is not None:
+                programs = self._custom_catalog.get("programs", [])
+                self._set_cached("available_programs", programs)
+                return programs
+                
+            # Try to extract catalog from device
+            try:
+                catalog = await self._client.extract_program_catalog(self.id)
+                if catalog and "programs" in catalog:
+                    programs = catalog["programs"]
+                    self._set_cached("available_programs", programs)
+                    return programs
+            except UnsupportedCapabilityError:
+                logger.warning(f"Device {self.id} does not support program catalog extraction")
+                
+            # If extraction failed, try to load from file based on device type
             ident = await self._client.get_device_ident(self.id)
-            # Use custom catalog if available
-            catalog = ProgramCatalog.for_device(ident, custom_catalog=self._custom_catalog)
+            device_type = ident.type_id
+                
+            # Create catalog object which will load from resources
+            catalog = ProgramCatalog.for_device_type(device_type)
             
-            programs = []
-            for name, program in catalog.programs_by_name.items():
-                programs.append({
-                    "name": name,
-                    "id": program.id,
-                    "description": getattr(program, "description", ""),
-                })
+            # Get programs from catalog
+            programs = catalog.get_all_programs()
             
-            # Programs rarely change, cache with longer TTL
-            self._set_cached("programs", programs, ttl=60.0)
+            # Cache the result
+            self._set_cached("available_programs", programs)
             return programs
+            
         except Exception as exc:
             raise ApplianceConnectionError(f"Failed to get available programs: {exc}") from exc
 
@@ -516,31 +619,70 @@ class Appliance:
             return cached_options
             
         try:
-            ident = await self._client.get_device_ident(self.id)
-            # Use custom catalog if available
-            catalog = ProgramCatalog.for_device(ident, custom_catalog=self._custom_catalog)
-            
-            try:
-                program = catalog.programs_by_name[program_name]
-            except KeyError as exc:
-                raise ValueError(
-                    f"Unknown program '{program_name}' for device type '{catalog.device_type}'"
-                ) from exc
+            # First try with custom catalog if available
+            if self._custom_catalog:
+                ident = await self._client.get_device_ident(self.id)
+                catalog = ProgramCatalog.for_device(ident, custom_catalog=self._custom_catalog)
                 
-            # Extract option information based on program definition
-            options = []
-            if hasattr(program, "options") and program.options:
-                for option in program.options:
-                    options.append({
-                        "id": option.id,
-                        "name": option.name,
-                        "values": option.allowed_values,
-                        "default": option.default,
-                    })
+                try:
+                    program = catalog.programs_by_name[program_name]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Unknown program '{program_name}' for device type '{catalog.device_type}'"
+                    ) from exc
+                    
+                # Extract option information from the static catalog
+                options = []
+                if hasattr(program, "options") and program.options:
+                    for option in program.options:
+                        options.append({
+                            "id": option.id,
+                            "name": option.name,
+                            "values": option.allowed_values,
+                            "default": option.default,
+                        })
+                
+                # Cache with longer TTL
+                self._set_cached(cache_key, options, ttl=60.0)
+                return options
             
-            # Program options rarely change, cache with longer TTL
-            self._set_cached(cache_key, options, ttl=60.0)
-            return options
+            # If no custom catalog, extract from device
+            # First get all available programs to find the program ID
+            programs = await self.get_available_programs()
+            program_id = None
+            
+            for prog in programs:
+                if prog["name"] == program_name:
+                    program_id = prog["id"]
+                    break
+                    
+            if program_id is None:
+                raise ValueError(f"Unknown program '{program_name}'")
+                
+            # Get options for this program ID using leaf 2/105
+            try:
+                options_data = await self._client.dop2_get_parsed(self.id, 2, 105, idx1=program_id)
+                options = []
+                
+                if isinstance(options_data, dict) and "options" in options_data:
+                    for opt in options_data["options"]:
+                        option = {
+                            "id": opt.get("id"),
+                            "name": opt.get("name", f"Option_{opt.get('id')}"),
+                            "default": opt.get("default"),
+                        }
+                        if "allowed_values" in opt:
+                            option["values"] = opt["allowed_values"]
+                        options.append(option)
+                
+                # Cache with longer TTL
+                self._set_cached(cache_key, options, ttl=60.0)
+                return options
+            except Exception:
+                # If we can't get options from DOP2, return empty list
+                self._set_cached(cache_key, [], ttl=60.0)
+                return []
+                
         except ValueError:
             raise
         except Exception as exc:
@@ -811,7 +953,7 @@ class Appliance:
     # New Phase 3 configuration methods
     
     async def get_capabilities(self) -> Dict[str, Any]:
-        """Return the capabilities of the appliance.
+        """Return the capabilities of the appliance using the DeviceCapability system.
         
         Returns
         -------
@@ -828,30 +970,102 @@ class Appliance:
             return copy.deepcopy(self._capabilities)
             
         try:
+            # First try to get the device profile from the client
+            if hasattr(self._client, 'device_profile') and self._client.device_profile:
+                if self._client.device_profile.device_id == self.id:
+                    self._device_profile = self._client.device_profile
+                    device_capabilities = self._client.device_profile.capabilities
+                    self._detected_capabilities = device_capabilities
+            
+            # If we don't have capabilities yet, detect them
+            if self._detected_capabilities is None:
+                self._detected_capabilities = await self._client.detect_capabilities(self.id)
+            
+            # Get device information
             ident = await self._client.get_device_ident(self.id)
             
-            # Build capabilities based on device identification
+            # Build capabilities based on device identification and detected capabilities
             capabilities = {
                 "device_type": ident.type_id,
                 "model": getattr(ident, "model", "Unknown"),
                 "firmware_version": getattr(ident, "firmware_version", "Unknown"),
             }
             
-            # Get supported programs
-            programs = await self.get_available_programs()
-            capabilities["supported_programs"] = programs
+            # Add DeviceCapability information
+            if self._detected_capabilities:
+                # Convert DeviceCapability enum to dictionary
+                cap_dict = {}
+                for cap in DeviceCapability:
+                    if cap != DeviceCapability.NONE:
+                        cap_dict[cap.name] = bool(cap in self._detected_capabilities)
+                capabilities["detected_capabilities"] = cap_dict
             
-            # Add other capability checks
-            try:
-                capabilities["supports_remote_start"] = await self.can_remote_start()
-            except Exception:
-                capabilities["supports_remote_start"] = False
+            # Get supported programs if program catalog is supported
+            if self._detected_capabilities and DeviceCapability.PROGRAM_CATALOG in self._detected_capabilities:
+                try:
+                    programs = await self.get_available_programs()
+                    capabilities["supported_programs"] = programs
+                except Exception as e:
+                    logger.warning(f"Could not get available programs: {e}")
+                    capabilities["supported_programs"] = []
+            else:
+                capabilities["supported_programs"] = []
                 
             # Cache capabilities (they rarely change)
             self._capabilities = capabilities
             return copy.deepcopy(capabilities)
         except Exception as exc:
             raise ApplianceConnectionError(f"Failed to get appliance capabilities: {exc}") from exc
+
+    async def has_capability(self, capability: DeviceCapability) -> bool:
+        """Check if the appliance has a specific capability.
+        
+        Parameters
+        ----------
+        capability : DeviceCapability
+            The capability to check
+            
+        Returns
+        -------
+        bool
+            True if the device has the capability, False otherwise
+        """
+        # Check device profile first if available
+        if self._device_profile:
+            return self._device_profile.has_capability(capability)
+        
+        # Check detected capabilities
+        if self._detected_capabilities is None:
+            try:
+                self._detected_capabilities = await self._client.detect_capabilities(self.id)
+            except Exception as e:
+                logger.warning(f"Could not detect capabilities: {e}")
+                # Check global detector as fallback
+                return detector.has_capability(self.id, capability)
+        
+        return bool(self._detected_capabilities and capability in self._detected_capabilities)
+
+    @classmethod
+    async def from_profile(cls, client: MieleClient, profile: DeviceProfile) -> 'Appliance':
+        """Create an Appliance instance from a device profile.
+        
+        Parameters
+        ----------
+        client : MieleClient
+            The Miele API client to use
+        profile : DeviceProfile
+            The device profile containing configuration and capabilities
+            
+        Returns
+        -------
+        Appliance
+            New Appliance instance configured with the profile
+        """
+        return cls(
+            client=client,
+            device_id=profile.device_id,
+            device_profile=profile
+        )
             
     async def get_settings(self) -> Dict[str, Any]:
         """Return all configurable settings for the appliance.

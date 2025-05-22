@@ -1,0 +1,23 @@
+{
+  "devices": [
+    {
+      "id": "000123456789",
+      "host": "192.168.1.100",
+      "group_id": "11223344556677889900aabbccddeeff",
+      "group_key": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    },
+    {
+      "id": "000987654321",
+      "host": "192.168.1.101",
+      "group_id": "aabbccddeeff00112233445566778899",
+      "group_key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    }
+  ],
+  "connection_settings": {
+    "max_connections": 5,
+    "connection_timeout": 10.0,
+    "health_check_interval": 30.0,
+    "retry_count": 3,
+    "retry_delay": 2.0
+  }
+} 

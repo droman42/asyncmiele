@@ -5,11 +5,12 @@ Async client for communicating with Miele devices.
 import json
 import datetime
 import binascii
-from typing import Dict, Any, Optional, Union, Tuple
+from typing import Dict, Any, Optional, Union, Tuple, List, Set, Type
 from urllib.parse import quote
 
 import aiohttp
 import asyncio
+import logging
 
 from asyncmiele.exceptions.api import ParseError, DeviceNotFoundError
 from asyncmiele.exceptions.network import (
@@ -18,15 +19,23 @@ from asyncmiele.exceptions.network import (
     NetworkTimeoutError,
 )
 from asyncmiele.exceptions.auth import RegistrationError
+from asyncmiele.exceptions.config import UnsupportedCapabilityError, ConfigurationError
 
 from asyncmiele.models.response import MieleResponse
 from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceState
+from asyncmiele.models.credentials import MieleCredentials
+from asyncmiele.models.device_config import MieleDeviceConfig
+from asyncmiele.models.device_profile import DeviceProfile
+
+from asyncmiele.capabilities import DeviceCapability, detector, test_capability
 
 from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
 import asyncmiele.utils.crypto as _crypto
 from asyncmiele.dop2.models import SFValue, ConsumptionStats
 from asyncmiele.models.summary import DeviceSummary
 from asyncmiele.utils.http_consts import ACCEPT_HEADER, USER_AGENT, CONTENT_TYPE_JSON
+
+logger = logging.getLogger(__name__)
 
 
 class MieleClient:
@@ -37,7 +46,8 @@ class MieleClient:
         host: str,
         group_id: bytes,
         group_key: bytes,
-        timeout: float = 5.0
+        timeout: float = 5.0,
+        device_profile: Optional[DeviceProfile] = None
     ):
         """
         Initialize the Miele API client.
@@ -47,11 +57,13 @@ class MieleClient:
             group_id: GroupID in bytes (use bytes.fromhex() to convert from hex string)
             group_key: GroupKey in bytes (use bytes.fromhex() to convert from hex string)
             timeout: Timeout for API requests in seconds
+            device_profile: Optional device profile for configuration and capability awareness
         """
         self.host = host
         self.group_id = group_id
         self.group_key = group_key
         self.timeout = timeout
+        self.device_profile = device_profile
         
         # Lazily-instantiated session (Phase-1 persistent connection pool)
         self._session: aiohttp.ClientSession | None = None
@@ -461,7 +473,13 @@ class MieleClient:
         """Return an :class:`asyncmiele.appliance.Appliance` proxy for *device_id*."""
         from asyncmiele.appliance import Appliance  # local import to avoid cycles
 
-        return Appliance(self, device_id)
+        # Pass device_profile if available and matches the requested device_id
+        device_profile = None
+        if hasattr(self, 'device_profile') and self.device_profile:
+            if self.device_profile.device_id == device_id:
+                device_profile = self.device_profile
+
+        return Appliance(self, device_id, device_profile=device_profile)
 
     # ------------------------------------------------------------------
     # Batch summaries
@@ -482,53 +500,100 @@ class MieleClient:
     # ---------------------------------------------------------------------
     # Convenience helpers – Phase 3
 
+    @test_capability(DeviceCapability.WAKE_UP)
     async def wake_up(self, device_id: str) -> None:
-        """Wake a sleeping device via local API.
-
-        This sends `{"DeviceAction": 2}` to `/Devices/<id>/State`.
         """
-        resource = f"/Devices/{quote(device_id, safe='')}/State"
-        await self._put_request(resource, {"DeviceAction": 2})
-
+        Wake up a device.
+        
+        This method sends a wake-up command to the device. It's decorated with
+        the test_capability decorator to track whether the device supports this
+        capability.
+        
+        Args:
+            device_id: The ID of the device
+        """
+        # Original implementation
+        await self._put_request(f"/devices/{device_id}/actions")
+    
+    @test_capability(DeviceCapability.REMOTE_START)
     async def can_remote_start(self, device_id: str) -> bool:
-        """Return ``True`` if the device reports it is ready and remote-start capable."""
-        resource = f"/Devices/{quote(device_id, safe='')}/State"
-        resp = await self._get_request(resource)
-
-        try:
-            status_val = resp.data["Status"]
-            # "Status" may be nested or raw; support both
-            if isinstance(status_val, dict):
-                status_raw = status_val.get("value_raw")
-            else:
-                status_raw = status_val
-
-            remote_enable = resp.data.get("RemoteEnable", [])
-            return status_raw == 0x04 and 15 in remote_enable
-        except Exception:
-            return False
-
-    async def remote_start(self, device_id: str, *, allow_remote_start: Optional[bool] = None) -> None:
-        """Start the currently programmed cycle.
-
-        Safety: disabled by default.  Activation options:
-
-        1.  Set ``asyncmiele.config.settings.enable_remote_start = True`` *once*.
-        2.  Pass ``allow_remote_start=True`` for an explicit per-call override.
         """
-        from asyncmiele.config import settings  # local import to avoid cycles
-
+        Check if a device can be remotely started.
+        
+        Args:
+            device_id: The ID of the device
+            
+        Returns:
+            True if the device can be remotely started, False otherwise
+        """
+        # Original implementation
+        response = await self._get_request(f"/devices/{device_id}/remoteStart/state")
+        data = response.as_dict()
+        return bool(data.get("value", False))
+    
+    @test_capability(DeviceCapability.REMOTE_START)
+    async def remote_start(
+        self, 
+        device_id: str, 
+        *, 
+        allow_remote_start: Optional[bool] = None
+    ) -> None:
+        """
+        Set the remote start state of a device.
+        
+        Args:
+            device_id: The ID of the device
+            allow_remote_start: Whether to allow remote start (None to toggle)
+        """
+        # Check capability first
+        self._require_capability(device_id, DeviceCapability.REMOTE_START)
+        
+        # Original implementation
         if allow_remote_start is None:
-            allow_remote_start = settings.enable_remote_start
-
-        if not allow_remote_start:
-            raise PermissionError(
-                "Remote start disabled – set asyncmiele.config.settings.enable_remote_start = True "
-                "or pass allow_remote_start=True explicitly."
-            )
-
-        resource = f"/Devices/{quote(device_id, safe='')}/State"
-        await self._put_request(resource, {"ProcessAction": 1})
+            # If not specified, toggle current state
+            current = await self.can_remote_start(device_id)
+            allow_remote_start = not current
+            
+        body = {"value": allow_remote_start}
+        await self._put_request(f"/devices/{device_id}/remoteStart/state", body)
+    
+    @test_capability(DeviceCapability.PROGRAM_CATALOG)
+    async def extract_program_catalog(self, device_id: str) -> Dict[str, Any]:
+        """
+        Extract the program catalog from a device.
+        
+        This method tries both the newer leaf method and the older method
+        to maximize compatibility across different device models and firmware versions.
+        
+        Args:
+            device_id: The ID of the device
+            
+        Returns:
+            The program catalog
+            
+        Raises:
+            UnsupportedCapabilityError: If the device does not support program catalogs
+        """
+        # Check capability first
+        self._require_capability(device_id, DeviceCapability.PROGRAM_CATALOG)
+        
+        # Try newer approach first (DOP2 leaf 2/1584)
+        try:
+            catalog = await self.get_program_catalog(device_id)
+            if catalog and catalog.get("programs"):
+                return catalog
+        except Exception as e:
+            logger.debug(f"Failed to get program catalog using primary method: {e}")
+        
+        # Try fallback approach (DOP2 leaf 14/1570)
+        try:
+            catalog = await self.fallback_get_program_catalog(device_id)
+            if catalog and catalog.get("programs"):
+                return catalog
+        except Exception as e:
+            logger.debug(f"Failed to get program catalog using fallback method: {e}")
+        
+        raise UnsupportedCapabilityError(f"Device {device_id} does not support program catalogs")
 
     # ---------------------------------------------------------------------
     # Phase 8 – DOP2 raw access
@@ -710,4 +775,319 @@ class MieleClient:
             cycles_completed=cycles,
             energy_wh_total=energy_wh,
             water_l_total=water_l,
-        ) 
+        )
+
+    # ---------------------------------------------------------------------
+    # Program catalog extraction methods
+
+    async def get_program_catalog(self, device_id: str) -> Dict[str, Any]:
+        """Extract program catalog data using correct DOP2 leaves.
+        
+        This uses leaf 2/1584 for the program list instead of 14/1570.
+        """
+        # First get the program IDs from the correct leaf
+        program_list_data = await self.dop2_get_parsed(device_id, 2, 1584)
+        
+        if not isinstance(program_list_data, dict) or "programIds" not in program_list_data:
+            raise ValueError("Invalid response format from program list leaf 2/1584")
+            
+        program_ids = program_list_data["programIds"]
+        if not program_ids:
+            return {"device_type": "unknown", "programs": []}
+            
+        # Get device info for the device type
+        ident = await self.get_device_ident(device_id)
+        if isinstance(ident.device_type, int):
+            from asyncmiele.enums import DeviceType
+            try:
+                device_type = DeviceType(ident.device_type).name
+            except ValueError:
+                device_type = f"unknown_{ident.device_type}"
+        else:
+            device_type = ident.device_type or ident.tech_type or "unknown"
+            
+        # Build the result structure
+        programs = []
+        
+        # Get options for each program ID
+        for pid in program_ids:
+            # Basic program structure with ID
+            program = {
+                "id": pid,
+                "name": f"Program_{pid}",  # Default name if no string table
+                "options": []
+            }
+            
+            # Try to get options using leaf 2/105 with program ID as index
+            try:
+                options_data = await self.dop2_get_parsed(device_id, 2, 105, idx1=pid)
+                if isinstance(options_data, dict) and "options" in options_data:
+                    program["options"] = options_data["options"]
+            except Exception:
+                # If options can't be retrieved, continue with empty options list
+                pass
+                
+            programs.append(program)
+            
+        return {
+            "device_type": device_type,
+            "programs": programs
+        }
+
+    async def fallback_get_program_catalog(self, device_id: str) -> Dict[str, Any]:
+        """Legacy method to extract program catalog using leaves 14/1570, 14/1571, and 14/2570.
+        
+        This is kept for backwards compatibility with devices that might use these leaves.
+        """
+        try:
+            # First try with the old leaf IDs
+            leaf_1570 = await self.dop2_read_leaf(device_id, 14, 1570)
+            
+            # Import parsing functions from the dump_program_catalog script
+            from asyncmiele.utils.program_parser import (
+                parse_program_list, 
+                parse_option_list, 
+                build_string_map
+            )
+            
+            programs = parse_program_list(leaf_1570)
+            
+            # Get options for each program
+            for prog in programs:
+                pid = prog["id"]
+                leaf_1571 = await self.dop2_read_leaf(device_id, 14, 1571, idx1=pid)
+                prog["options"] = parse_option_list(leaf_1571)
+            
+            # Resolve string names
+            string_blob = await self.dop2_read_leaf(device_id, 14, 2570)
+            str_map = build_string_map(string_blob)
+            
+            for p in programs:
+                p["name"] = str_map.get(p.pop("name_id", 0), f"program_{p['id']}")
+                for opt in p["options"]:
+                    opt["name"] = str_map.get(opt.pop("name_id", 0), f"opt_{opt['id']}")
+            
+            # Get device type
+            ident = await self.get_device_ident(device_id)
+            if isinstance(ident.device_type, int):
+                from asyncmiele.enums import DeviceType
+                device_type = DeviceType(ident.device_type).name
+            else:
+                device_type = ident.device_type or ident.tech_type or "unknown"
+                
+            return {
+                "device_type": device_type,
+                "programs": programs
+            }
+        except Exception as e:
+            # If the old way fails, return empty catalog
+            return {"device_type": "unknown", "programs": []}
+
+    # ------------------------------------------------------------------
+    # Device capability methods
+    # ------------------------------------------------------------------
+    
+    def _require_capability(self, device_id: str, capability: DeviceCapability) -> None:
+        """
+        Check if a device has a specific capability, raising an exception if not.
+        
+        Args:
+            device_id: The ID of the device
+            capability: The capability to check
+            
+        Raises:
+            UnsupportedCapabilityError: If the device does not have the capability
+        """
+        # If we have a device profile, check its capabilities
+        if self.device_profile and self.device_profile.device_id == device_id:
+            if not self.device_profile.has_capability(capability):
+                raise UnsupportedCapabilityError(
+                    f"Device {device_id} does not support the {capability.name} capability"
+                )
+        # Otherwise, check the global capability detector
+        elif not detector.has_capability(device_id, capability):
+            raise UnsupportedCapabilityError(
+                f"Device {device_id} does not support the {capability.name} capability"
+            )
+    
+    async def detect_capabilities(self, device_id: str) -> DeviceCapability:
+        """
+        Detect the capabilities of a device.
+        
+        This method performs tests for various capabilities and returns the
+        detected capabilities. It updates both the global capability detector
+        and the device profile (if available).
+        
+        Args:
+            device_id: The ID of the device
+            
+        Returns:
+            The detected capabilities
+        """
+        logger.info(f"Detecting capabilities for device {device_id}")
+        
+        # Get device information for device type
+        try:
+            device = await self.get_device(device_id)
+            device_type = device.ident.type
+        except Exception as e:
+            logger.warning(f"Could not get device information for {device_id}: {e}")
+            device_type = None
+        
+        # Test basic capabilities
+        
+        # Test state reporting
+        try:
+            await self.get_device_state(device_id)
+            detector.record_capability_test(device_id, DeviceCapability.STATE_REPORTING, True)
+        except Exception as e:
+            logger.debug(f"State reporting test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.STATE_REPORTING, False)
+        
+        # Test wake up capability
+        try:
+            await self.wake_up(device_id)
+            detector.record_capability_test(device_id, DeviceCapability.WAKE_UP, True)
+        except Exception as e:
+            logger.debug(f"Wake up test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.WAKE_UP, False)
+        
+        # Test remote start capability
+        try:
+            can_remote = await self.can_remote_start(device_id)
+            detector.record_capability_test(device_id, DeviceCapability.REMOTE_START, can_remote)
+        except Exception as e:
+            logger.debug(f"Remote start test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.REMOTE_START, False)
+        
+        # Test DOP2 basic capability
+        try:
+            # Try a simple DOP2 leaf read
+            await self.dop2_read_leaf(device_id, 1, 2)
+            detector.record_capability_test(device_id, DeviceCapability.DOP2_BASIC, True)
+        except Exception as e:
+            logger.debug(f"DOP2 basic test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.DOP2_BASIC, False)
+        
+        # Test program catalog capability
+        try:
+            catalog = await self.extract_program_catalog(device_id)
+            has_catalog = bool(catalog and catalog.get("programs"))
+            detector.record_capability_test(device_id, DeviceCapability.PROGRAM_CATALOG, has_catalog)
+        except Exception as e:
+            logger.debug(f"Program catalog test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.PROGRAM_CATALOG, False)
+        
+        # Test consumption stats capability
+        try:
+            stats = await self.get_consumption_stats(device_id)
+            has_stats = bool(stats)
+            detector.record_capability_test(device_id, DeviceCapability.CONSUMPTION_STATS, has_stats)
+        except Exception as e:
+            logger.debug(f"Consumption stats test failed for {device_id}: {e}")
+            detector.record_capability_test(device_id, DeviceCapability.CONSUMPTION_STATS, False)
+        
+        # Get the detected capabilities
+        if device_type:
+            capabilities = detector.get_capabilities(device_id, device_type)
+        else:
+            capabilities = detector.get_capabilities(device_id, 0)
+        
+        # Update device profile if available
+        if self.device_profile and self.device_profile.device_id == device_id:
+            self.device_profile.capabilities = capabilities
+            self.device_profile.failed_capabilities = detector.get_failed_tests(device_id)
+        
+        logger.info(f"Detected capabilities for device {device_id}: {capabilities}")
+        return capabilities
+    
+    # ------------------------------------------------------------------
+    # Factory methods for configuration support
+    # ------------------------------------------------------------------
+    
+    @classmethod
+    def from_profile(cls, profile: DeviceProfile) -> "MieleClient":
+        """
+        Create a client from a device profile.
+        
+        Args:
+            profile: The device profile
+            
+        Returns:
+            A new MieleClient instance
+        """
+        client = cls(
+            host=profile.config.host,
+            group_id=profile.credentials.group_id,
+            group_key=profile.credentials.group_key,
+            timeout=profile.timeout,
+            device_profile=profile
+        )
+        return client
+    
+    @classmethod
+    def from_config(
+        cls,
+        config: MieleDeviceConfig,
+        credentials: MieleCredentials,
+        **kwargs
+    ) -> "MieleClient":
+        """
+        Create a client from a device configuration and credentials.
+        
+        Args:
+            config: The device configuration
+            credentials: The security credentials
+            **kwargs: Additional keyword arguments to pass to the constructor
+            
+        Returns:
+            A new MieleClient instance
+        """
+        return cls(
+            host=config.host,
+            group_id=credentials.group_id,
+            group_key=credentials.group_key,
+            **kwargs
+        )
+
+    # ------------------------------------------------------------------
+    # Enhanced method overrides with capability checks
+    # ------------------------------------------------------------------
+    
+    @test_capability(DeviceCapability.PROGRAM_CATALOG)
+    async def get_program_catalog(self, device_id: str) -> Dict[str, Any]:
+        """
+        Extract the program catalog from a device.
+        
+        This method tries both the newer leaf method and the older method
+        to maximize compatibility across different device models and firmware versions.
+        
+        Args:
+            device_id: The ID of the device
+            
+        Returns:
+            The program catalog
+            
+        Raises:
+            UnsupportedCapabilityError: If the device does not support program catalogs
+        """
+        # Original implementation
+        # Try newer approach first (DOP2 leaf 2/1584)
+        try:
+            catalog = await self.get_program_catalog(device_id)
+            if catalog and catalog.get("programs"):
+                return catalog
+        except Exception as e:
+            logger.debug(f"Failed to get program catalog using primary method: {e}")
+        
+        # Try fallback approach (DOP2 leaf 14/1570)
+        try:
+            catalog = await self.fallback_get_program_catalog(device_id)
+            if catalog and catalog.get("programs"):
+                return catalog
+        except Exception as e:
+            logger.debug(f"Failed to get program catalog using fallback method: {e}")
+        
+        raise UnsupportedCapabilityError(f"Device {device_id} does not support program catalogs")
+    
+    # ... and so on for other capability-aware methods ... 
