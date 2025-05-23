@@ -719,7 +719,72 @@ appliance = Appliance(client, creds["device_id"])
 
 ### Dumping a programme catalogue from a live appliance 🔧
 
+## DOP2 Tree Visualization
 
+The library includes tools for exploring and visualizing the DOP2 tree structure of Miele devices. This can be helpful for understanding the device's capabilities and data structure.
+
+### Using the DOP2Visualizer
+
+The `DOP2Visualizer` class allows you to generate HTML and ASCII visualizations of a device's DOP2 tree structure:
+
+```python
+from asyncmiele import MieleClient
+
+async with MieleClient(config) as client:
+    # Generate HTML visualization
+    await client.visualize_dop2_tree(
+        device_id="your_device_id",
+        output_file="dop2_tree.html",
+        format_type="html",
+        known_only=True  # Only explore known attributes
+    )
+    
+    # Generate ASCII visualization
+    await client.visualize_dop2_tree(
+        device_id="your_device_id",
+        output_file="dop2_tree.txt",
+        format_type="ascii",
+        known_only=True
+    )
+    
+    # Save tree data to JSON for later use
+    await client.export_dop2_tree(
+        device_id="your_device_id",
+        output_file="dop2_tree.json",
+        known_only=True
+    )
+    
+    # Visualize from existing JSON file
+    await client.visualize_from_json(
+        json_file="dop2_tree.json",
+        output_file="dop2_tree_from_json.html",
+        format_type="html"
+    )
+```
+
+### Example Script
+
+An example script is provided in the `examples` directory:
+
+```bash
+# Explore a device and generate visualizations
+python examples/visualize_dop2_tree.py --config config.json --device your_device_id --output-dir ./output
+
+# Use an existing JSON file
+python examples/visualize_dop2_tree.py --json-file output/dop2_tree.json --output-dir ./output
+```
+
+### HTML Visualization
+
+The HTML visualization provides an interactive tree view that allows you to:
+- Expand/collapse nodes
+- View leaf values and metadata
+- Search for specific nodes or leaves
+- Export the tree data to JSON
+
+### ASCII Visualization
+
+The ASCII visualization provides a simple text-based representation of the tree structure, suitable for console output or inclusion in documentation.
 
 # Miele Device Setup Guide
 
@@ -1015,5 +1080,3 @@ This project is based on reverse-engineering efforts of the Miele@Home protocol 
 ## License
 
 MIT
-
-#### Wait for Conditions

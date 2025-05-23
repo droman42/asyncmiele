@@ -5,7 +5,7 @@ Async client for communicating with Miele devices.
 import json
 import datetime
 import binascii
-from typing import Dict, Any, Optional, Union, Tuple, List, Set, Type
+from typing import Dict, Any, Optional, Union, Tuple, List, Set, Type, cast
 from urllib.parse import quote
 
 import aiohttp
@@ -31,9 +31,13 @@ from asyncmiele.capabilities import DeviceCapability, detector, test_capability
 
 from asyncmiele.utils.crypto import generate_credentials, build_auth_header, pad_payload, encrypt_payload
 import asyncmiele.utils.crypto as _crypto
-from asyncmiele.dop2.models import SFValue, ConsumptionStats
+from asyncmiele.dop2.models import SFValue, ConsumptionStats, DeviceGenerationType, DOP2Tree, DeviceCombinedState
+from asyncmiele.dop2.explorer import DOP2Explorer
+from asyncmiele.dop2.client import DOP2Client
+from asyncmiele.dop2.visualizer import DOP2Visualizer
 from asyncmiele.models.summary import DeviceSummary
 from asyncmiele.utils.http_consts import ACCEPT_HEADER, USER_AGENT, CONTENT_TYPE_JSON
+from asyncmiele.appliance import Appliance  # Import moved from line 474
 
 logger = logging.getLogger(__name__)
 
@@ -471,8 +475,6 @@ class MieleClient:
 
     async def device(self, device_id: str):
         """Return an :class:`asyncmiele.appliance.Appliance` proxy for *device_id*."""
-        from asyncmiele.appliance import Appliance  # local import to avoid cycles
-
         # Pass device_profile if available and matches the requested device_id
         device_profile = None
         if hasattr(self, 'device_profile') and self.device_profile:
@@ -577,87 +579,23 @@ class MieleClient:
         # Check capability first
         self._require_capability(device_id, DeviceCapability.PROGRAM_CATALOG)
         
-        # Try newer approach first (DOP2 leaf 2/1584)
-        try:
-            catalog = await self.get_program_catalog(device_id)
-            if catalog and catalog.get("programs"):
-                return catalog
-        except Exception as e:
-            logger.debug(f"Failed to get program catalog using primary method: {e}")
+        # Get the DOP2Client
+        dop2_client = self.get_dop2_client()
         
-        # Try fallback approach (DOP2 leaf 14/1570)
+        # Try to get the program catalog
         try:
-            catalog = await self.fallback_get_program_catalog(device_id)
-            if catalog and catalog.get("programs"):
-                return catalog
+            return await dop2_client.get_program_catalog(device_id)
         except Exception as e:
-            logger.debug(f"Failed to get program catalog using fallback method: {e}")
-        
-        raise UnsupportedCapabilityError(f"Device {device_id} does not support program catalogs")
-
-    # ---------------------------------------------------------------------
-    # Phase 8 – DOP2 raw access
-
-    @staticmethod
-    def _dop2_path(device_id: str, unit: int, attribute: int, idx1: int, idx2: int) -> str:
-        return f"/Devices/{quote(device_id, safe='')}/DOP2/{unit}/{attribute}?idx1={idx1}&idx2={idx2}"
-
-    async def _get_raw(self, resource: str) -> bytes:
-        """Internal helper similar to `_get_request` but returns decrypted *bytes*."""
-        _status, decrypted = await self._request_bytes("GET", resource, allowed_status=(200,))
-        return decrypted
-
-    async def dop2_read_leaf(
-        self,
-        device_id: str,
-        unit: int,
-        attribute: int,
-        *,
-        idx1: int = 0,
-        idx2: int = 0,
-    ) -> bytes:
-        """Return decrypted raw bytes of a DOP2 leaf."""
-        path = self._dop2_path(device_id, unit, attribute, idx1, idx2)
-        return await self._get_raw(path)
-
-    async def dop2_write_leaf(
-        self,
-        device_id: str,
-        unit: int,
-        attribute: int,
-        payload: bytes,
-        *,
-        idx1: int = 0,
-        idx2: int = 0,
-    ) -> None:
-        """Write raw *payload* to a DOP2 leaf."""
-        path = self._dop2_path(device_id, unit, attribute, idx1, idx2)
-        await self._put_request(path, payload)
-
-    async def dop2_get_parsed(
-        self,
-        device_id: str,
-        unit: int,
-        attribute: int,
-        *,
-        idx1: int = 0,
-        idx2: int = 0,
-    ) -> Any:
-        """Return parsed representation of a DOP2 leaf using dop2.parser."""
-        raw = await self.dop2_read_leaf(device_id, unit, attribute, idx1=idx1, idx2=idx2)
-        from asyncmiele.dop2.parser import parse_leaf
-
-        return parse_leaf(unit, attribute, raw)
+            logger.debug(f"Failed to get program catalog: {e}")
+            raise UnsupportedCapabilityError(f"Device {device_id} does not support program catalogs")
 
     # ---------------------------------------------------------------------
     # Phase 10 – Settings helper via SF_Value (simplified)
 
     async def get_setting(self, device_id: str, sf_id: int) -> SFValue:
         """Return the `SFValue` for **sf_id** by reading leaf 2/105 with idx1."""
-        parsed = await self.dop2_get_parsed(device_id, 2, 105, idx1=sf_id, idx2=0)
-        if not isinstance(parsed, SFValue):
-            raise ValueError("Leaf did not return SFValue structure")
-        return parsed
+        dop2_client = self.get_dop2_client()
+        return await dop2_client.get_setting(device_id, sf_id)
 
     async def set_setting(self, device_id: str, sf_id: int, new_value: int) -> None:
         """Write **new_value** to setting *sf_id* using leaf 2/105.
@@ -666,20 +604,8 @@ class MieleClient:
             <sf_id:u16> <new_value:u16>
         padded to blocksize 16.
         """
-        sf = await self.get_setting(device_id, sf_id)
-
-        if not (sf.minimum <= new_value <= sf.maximum):
-            raise ValueError(f"Value {new_value} outside allowed range {sf.range}")
-
-        payload = bytes([
-            (sf_id >> 8) & 0xFF,
-            sf_id & 0xFF,
-            (new_value >> 8) & 0xFF,
-            new_value & 0xFF,
-        ])
-
-        # DOP2 requires 16-byte block padding/ encryption handled by _put_request
-        await self.dop2_write_leaf(device_id, 2, 105, payload, idx1=sf_id, idx2=0)
+        dop2_client = self.get_dop2_client()
+        await dop2_client.set_setting(device_id, sf_id, new_value)
 
     # ---------------------------------------------------------------------
     # Phase 11 – Summary helper
@@ -689,8 +615,9 @@ class MieleClient:
         ident_task = asyncio.create_task(self.get_device_ident(device_id))
         state_task = asyncio.create_task(self.get_device_state(device_id))
 
+        dop2_client = self.get_dop2_client()
         combined_state_task = asyncio.create_task(
-            self.dop2_get_parsed(device_id, 2, 256)
+            dop2_client.get_parsed(device_id, 2, 256)
         )
 
         ready_task = asyncio.create_task(self.can_remote_start(device_id))
@@ -701,7 +628,6 @@ class MieleClient:
         combined = None
         try:
             parsed = await combined_state_task
-            from asyncmiele.dop2.models import DeviceCombinedState
 
             if isinstance(parsed, DeviceCombinedState):
                 combined = parsed
@@ -739,43 +665,8 @@ class MieleClient:
         This helper fetches leaves 2/119 (hours-of-operation) and 2/138 (cycle counter).
         If a leaf is missing or cannot be parsed the corresponding field is ``None``.
         """
-        hrs_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 119))
-        cyc_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 138))
-        totals_task = asyncio.create_task(self.dop2_get_parsed(device_id, 2, 6195))
-
-        hours: int | None = None
-        cycles: int | None = None
-        energy_wh: int | None = None
-        water_l: int | None = None
-
-        try:
-            res = await hrs_task
-            if isinstance(res, int):
-                hours = res
-        except Exception:
-            pass
-
-        try:
-            res = await cyc_task
-            if isinstance(res, int):
-                cycles = res
-        except Exception:
-            pass
-
-        try:
-            res = await totals_task
-            if isinstance(res, dict):
-                energy_wh = res.get("energy_wh_total")
-                water_l = res.get("water_l_total")
-        except Exception:
-            pass
-
-        return ConsumptionStats(
-            hours_of_operation=hours,
-            cycles_completed=cycles,
-            energy_wh_total=energy_wh,
-            water_l_total=water_l,
-        )
+        dop2_client = self.get_dop2_client()
+        return await dop2_client.get_consumption_stats(device_id)
 
     # ---------------------------------------------------------------------
     # Program catalog extraction methods
@@ -785,103 +676,20 @@ class MieleClient:
         
         This uses leaf 2/1584 for the program list instead of 14/1570.
         """
-        # First get the program IDs from the correct leaf
-        program_list_data = await self.dop2_get_parsed(device_id, 2, 1584)
-        
-        if not isinstance(program_list_data, dict) or "programIds" not in program_list_data:
-            raise ValueError("Invalid response format from program list leaf 2/1584")
-            
-        program_ids = program_list_data["programIds"]
-        if not program_ids:
-            return {"device_type": "unknown", "programs": []}
-            
-        # Get device info for the device type
-        ident = await self.get_device_ident(device_id)
-        if isinstance(ident.device_type, int):
-            from asyncmiele.enums import DeviceType
-            try:
-                device_type = DeviceType(ident.device_type).name
-            except ValueError:
-                device_type = f"unknown_{ident.device_type}"
-        else:
-            device_type = ident.device_type or ident.tech_type or "unknown"
-            
-        # Build the result structure
-        programs = []
-        
-        # Get options for each program ID
-        for pid in program_ids:
-            # Basic program structure with ID
-            program = {
-                "id": pid,
-                "name": f"Program_{pid}",  # Default name if no string table
-                "options": []
-            }
-            
-            # Try to get options using leaf 2/105 with program ID as index
-            try:
-                options_data = await self.dop2_get_parsed(device_id, 2, 105, idx1=pid)
-                if isinstance(options_data, dict) and "options" in options_data:
-                    program["options"] = options_data["options"]
-            except Exception:
-                # If options can't be retrieved, continue with empty options list
-                pass
-                
-            programs.append(program)
-            
-        return {
-            "device_type": device_type,
-            "programs": programs
-        }
+        dop2_client = self.get_dop2_client()
+        return await dop2_client.get_program_catalog(device_id)
 
     async def fallback_get_program_catalog(self, device_id: str) -> Dict[str, Any]:
-        """Legacy method to extract program catalog using leaves 14/1570, 14/1571, and 14/2570.
+        """Extract program catalog using legacy leaves 14/1570, 14/1571, and 14/2570.
         
-        This is kept for backwards compatibility with devices that might use these leaves.
+        Args:
+            device_id: Device identifier
+            
+        Returns:
+            Program catalog dictionary
         """
-        try:
-            # First try with the old leaf IDs
-            leaf_1570 = await self.dop2_read_leaf(device_id, 14, 1570)
-            
-            # Import parsing functions from the dump_program_catalog script
-            from asyncmiele.utils.program_parser import (
-                parse_program_list, 
-                parse_option_list, 
-                build_string_map
-            )
-            
-            programs = parse_program_list(leaf_1570)
-            
-            # Get options for each program
-            for prog in programs:
-                pid = prog["id"]
-                leaf_1571 = await self.dop2_read_leaf(device_id, 14, 1571, idx1=pid)
-                prog["options"] = parse_option_list(leaf_1571)
-            
-            # Resolve string names
-            string_blob = await self.dop2_read_leaf(device_id, 14, 2570)
-            str_map = build_string_map(string_blob)
-            
-            for p in programs:
-                p["name"] = str_map.get(p.pop("name_id", 0), f"program_{p['id']}")
-                for opt in p["options"]:
-                    opt["name"] = str_map.get(opt.pop("name_id", 0), f"opt_{opt['id']}")
-            
-            # Get device type
-            ident = await self.get_device_ident(device_id)
-            if isinstance(ident.device_type, int):
-                from asyncmiele.enums import DeviceType
-                device_type = DeviceType(ident.device_type).name
-            else:
-                device_type = ident.device_type or ident.tech_type or "unknown"
-                
-            return {
-                "device_type": device_type,
-                "programs": programs
-            }
-        except Exception as e:
-            # If the old way fails, return empty catalog
-            return {"device_type": "unknown", "programs": []}
+        dop2_client = self.get_dop2_client()
+        return await dop2_client._get_program_catalog_legacy(device_id)
 
     # ------------------------------------------------------------------
     # Device capability methods
@@ -1091,3 +899,189 @@ class MieleClient:
         raise UnsupportedCapabilityError(f"Device {device_id} does not support program catalogs")
     
     # ... and so on for other capability-aware methods ... 
+
+    async def detect_device_generation(self, device_id: str) -> DeviceGenerationType:
+        """Detect the generation of a Miele device.
+        
+        This method uses the generation detector to determine which generation
+        the device belongs to based on its available DOP2 leaves.
+        
+        Args:
+            device_id: Device identifier
+            
+        Returns:
+            Detected device generation type
+        """
+        dop2_client = self.get_dop2_client()
+        return await dop2_client.detect_generation(device_id)
+        
+    # ------------------------------------------------------------------
+    # DOP2 Tree Explorer integration
+    # ------------------------------------------------------------------
+    
+    def get_explorer(self) -> "DOP2Explorer":
+        """Get a DOP2Explorer instance configured with this client.
+        
+        Returns:
+            DOP2Explorer instance
+        """
+        dop2_client = self.get_dop2_client()
+        return dop2_client.get_explorer()
+        
+    async def explore_dop2_tree(
+        self,
+        device_id: str,
+        max_unit: int = 20,
+        max_attribute: int = 10000,
+        known_only: bool = False,
+        concurrency: int = 3
+    ) -> "DOP2Tree":
+        """Explore the DOP2 tree structure of a device.
+        
+        This is a convenience method that creates a DOP2Explorer and uses it
+        to explore the device's DOP2 tree structure.
+        
+        Args:
+            device_id: Device identifier
+            max_unit: Maximum unit ID to try
+            max_attribute: Maximum attribute ID to try
+            known_only: If True, only explore known leaf attributes
+            concurrency: Maximum number of concurrent requests
+            
+        Returns:
+            DOP2Tree object containing the complete tree structure
+        """
+        dop2_client = self.get_dop2_client()
+        explorer = dop2_client.get_explorer()
+        return await explorer.explore_device(
+            device_id,
+            max_unit=max_unit,
+            max_attribute=max_attribute,
+            known_only=known_only,
+            concurrency=concurrency
+        )
+        
+    async def export_dop2_tree(
+        self,
+        device_id: str,
+        output_file: str,
+        known_only: bool = True
+    ) -> None:
+        """Explore a device's DOP2 tree and export it to a JSON file.
+        
+        This is a convenience method that explores a device's DOP2 tree and
+        exports the results to a JSON file.
+        
+        Args:
+            device_id: Device identifier
+            output_file: Path to save the JSON output
+            known_only: If True, only explore known leaf attributes
+        """
+        dop2_client = self.get_dop2_client()
+        explorer = dop2_client.get_explorer()
+        tree = await self.explore_dop2_tree(device_id, known_only=known_only)
+        await explorer.export_tree_to_json(tree, output_file)
+        
+    def get_dop2_client(self) -> DOP2Client:
+        """Get a DOP2Client instance configured with this client.
+        
+        Returns:
+            DOP2Client instance
+        """
+        return DOP2Client(self)
+        
+    # ------------------------------------------------------------------
+    # DOP2 Tree Visualizer integration
+    # ------------------------------------------------------------------
+    
+    async def visualize_dop2_tree(
+        self,
+        device_id: str,
+        output_file: str,
+        format_type: str = 'html',
+        known_only: bool = True,
+        max_unit: int = 20,
+        max_attribute: int = 10000,
+        concurrency: int = 3
+    ) -> None:
+        """Visualize the DOP2 tree structure of a device.
+        
+        This is a convenience method that explores a device's DOP2 tree and
+        generates a visualization of it.
+        
+        Args:
+            device_id: Device identifier
+            output_file: Path to save the visualization
+            format_type: Type of visualization to generate ('html' or 'ascii')
+            known_only: If True, only explore known leaf attributes
+            max_unit: Maximum unit ID to try
+            max_attribute: Maximum attribute ID to try
+            concurrency: Maximum number of concurrent requests
+        """
+        # Explore the tree
+        tree = await self.explore_dop2_tree(
+            device_id,
+            max_unit=max_unit,
+            max_attribute=max_attribute,
+            known_only=known_only,
+            concurrency=concurrency
+        )
+        
+        # Create visualizer
+        visualizer = DOP2Visualizer(tree)
+        
+        # Generate visualization
+        if format_type.lower() == 'html':
+            visualizer.save_html(output_file)
+        elif format_type.lower() == 'ascii':
+            visualizer.save_ascii(output_file)
+        else:
+            raise ValueError(f"Unsupported format type: {format_type}")
+            
+    async def visualize_from_json(
+        self,
+        json_file: str,
+        output_file: str,
+        format_type: str = 'html'
+    ) -> None:
+        """Visualize a DOP2 tree from a JSON file.
+        
+        This is a convenience method that loads a DOP2 tree from a JSON file
+        and generates a visualization of it.
+        
+        Args:
+            json_file: Path to JSON file containing tree data
+            output_file: Path to save the visualization
+            format_type: Type of visualization to generate ('html' or 'ascii')
+        """
+        from asyncmiele.dop2.visualizer import visualize_from_json
+        visualize_from_json(json_file, output_file, format_type)
+
+    def with_login_metadata(
+        self,
+        vg: str = "",
+        country: str = "",
+        language: str = "",
+        timeZone: str = "",
+        state: str = "",
+        currency: str = "",
+        relaunch: bool = True,
+    ) -> "MieleClient":
+        # Implementation of the method
+        pass
+
+    def _copy_with_config(
+        self, config: MieleDeviceConfig, with_original_config: bool = True
+    ) -> "MieleClient":
+        # Implementation of the method
+        pass
+
+    def explore_dop2_tree(
+        self, device_id: str, known_only: bool = False, concurrency: int = 10
+    ) -> DOP2Tree:
+        # Implementation of the method
+        pass
+
+    def get_dop2_client(self) -> DOP2Client:
+        # Implementation of the method
+        pass 
