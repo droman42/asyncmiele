@@ -8,7 +8,6 @@ from asyncmiele.models.device import MieleDevice, DeviceIdentification, DeviceSt
 from asyncmiele.models.response import MieleResponse
 from asyncmiele.models.summary import DeviceSummary
 from asyncmiele.models.credentials import MieleCredentials
-from asyncmiele.models.device_config import MieleDeviceConfig
 from asyncmiele.models.device_profile import DeviceProfile
 
 __all__ = [
@@ -18,6 +17,5 @@ __all__ = [
     'MieleResponse',
     'DeviceSummary',
     'MieleCredentials',
-    'MieleDeviceConfig',
     'DeviceProfile',
 ]

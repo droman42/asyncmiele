@@ -7,7 +7,7 @@ Usage:
 import asyncio
 import argparse
 
-from asyncmiele import MieleClient
+from asyncmiele import MieleClient, Appliance
 
 
 async def main():
@@ -21,7 +21,8 @@ async def main():
     client = MieleClient.from_hex(args.host, args.group_id, args.group_key)
 
     async with client:
-        appliance = await client.device(args.device)
+        # Create appliance with proper architecture - client as dependency
+        appliance = Appliance(client, args.device)
         await appliance.wake_up()
         print("Wake-up command sent")
 

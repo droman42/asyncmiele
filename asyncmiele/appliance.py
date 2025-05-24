@@ -11,18 +11,23 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, TypedDict, Callable, Awaitable, Set, Union, cast, Iterator
+from typing import Any, Dict, Iterable, List, Optional, TypedDict, Callable, Awaitable, Set, Union, cast, Iterator, TypeVar, Generic
+from datetime import datetime, timedelta
 
 from asyncmiele.api.client import MieleClient
 from asyncmiele.models.summary import DeviceSummary
 from asyncmiele.programs import ProgramCatalog, build_dop2_selection
 from asyncmiele.capabilities import DeviceCapability, detector
 from asyncmiele.exceptions.config import UnsupportedCapabilityError
+from asyncmiele.exceptions.api import DeviceNotFoundError
 from asyncmiele.models.device_profile import DeviceProfile
+from asyncmiele.config.loader import load_device_profile
 
 __all__: Iterable[str] = ["Appliance", "ApplianceError", "ProgramError", "ApplianceConnectionError", 
                          "Credentials", "SimulationMode"]
 
+# Define TypeVar for generic operations
+T = TypeVar('T')
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -398,20 +403,30 @@ class Appliance:
     async def _check_program_capabilities(self) -> None:
         """Check if the device supports program selection and raise an error if not.
         
+        Uses Set-based capability operations for efficient checking.
+        
         Raises
         ------
         ProgramError
-            If the device does not support program selection
+            If the device does not support program operations
+        UnsupportedCapabilityError
+            If required capabilities are missing
         """
-        program_capabilities = [
-            DeviceCapability.PROGRAM_CATALOG,
-            DeviceCapability.PROGRAM_SELECTION
-        ]
+        # Define required capabilities as a set
+        required_caps = {DeviceCapability.PROGRAM_CATALOG, DeviceCapability.PROGRAM_SELECTION}
         
-        # Check if any of the required capabilities are missing
+        # Check if device profile has all required capabilities
+        if self._device_profile:
+            missing = self._device_profile.get_missing_capabilities(required_caps)
+            if missing:
+                raise UnsupportedCapabilityError(
+                    f"Device {self.id} missing program capabilities: {[cap.name for cap in missing]}"
+                )
+            return
+        
+        # Fallback to individual capability checking
         missing_capabilities = []
-        
-        for capability in program_capabilities:
+        for capability in required_caps:
             if not await self.has_capability(capability):
                 missing_capabilities.append(capability.name)
         
@@ -953,12 +968,15 @@ class Appliance:
     # New Phase 3 configuration methods
     
     async def get_capabilities(self) -> Dict[str, Any]:
-        """Return the capabilities of the appliance using the DeviceCapability system.
+        """Return the capabilities of the appliance using the enhanced DeviceProfile system.
+        
+        Returns comprehensive capability information with Set-based operations
+        and DeviceProfile integration.
         
         Returns
         -------
         Dict[str, Any]
-            Capabilities including supported features, programs, etc.
+            Capabilities including supported features, failed tests, and detection info
             
         Raises
         ------
@@ -970,46 +988,84 @@ class Appliance:
             return copy.deepcopy(self._capabilities)
             
         try:
-            # First try to get the device profile from the client
-            if hasattr(self._client, 'device_profile') and self._client.device_profile:
-                if self._client.device_profile.device_id == self.id:
-                    self._device_profile = self._client.device_profile
-                    device_capabilities = self._client.device_profile.capabilities
-                    self._detected_capabilities = device_capabilities
+            # Use DeviceProfile if available (Phase 3 enhancement)
+            if self._device_profile:
+                capabilities = {
+                    "device_type": self._device_profile.device_type.name,
+                    "device_id": self._device_profile.device_id,
+                    "friendly_name": self._device_profile.friendly_name,
+                    "capabilities": {
+                        "supported": [cap.name for cap in self._device_profile.capabilities],
+                        "failed": [cap.name for cap in self._device_profile.failed_capabilities],
+                        "detection_date": self._device_profile.capability_detection_date.isoformat() if self._device_profile.capability_detection_date else None
+                    },
+                    "program_catalog_available": self._device_profile.program_catalog is not None,
+                    "program_catalog_method": self._device_profile.program_catalog_extraction_method
+                }
+                
+                # Add connection information
+                capabilities["connection"] = {
+                    "host": self._device_profile.host,
+                    "timeout": self._device_profile.timeout,
+                    "wake_before_commands": self._device_profile.wake_before_commands
+                }
+                
+                # Cache and return
+                self._capabilities = capabilities
+                return copy.deepcopy(capabilities)
             
-            # If we don't have capabilities yet, detect them
-            if self._detected_capabilities is None:
-                self._detected_capabilities = await self._client.detect_capabilities(self.id)
-            
+            # Fallback to legacy detection method
             # Get device information
             ident = await self._client.get_device_ident(self.id)
             
-            # Build capabilities based on device identification and detected capabilities
+            # Detect capabilities if not already done
+            if self._detected_capabilities is None:
+                self._detected_capabilities = await self._client.detect_capabilities(self.id)
+            
+            # Build capabilities dictionary
             capabilities = {
                 "device_type": ident.type_id,
+                "device_id": self.id,
                 "model": getattr(ident, "model", "Unknown"),
                 "firmware_version": getattr(ident, "firmware_version", "Unknown"),
             }
             
-            # Add DeviceCapability information
+            # Add capability information using Set operations
             if self._detected_capabilities:
-                # Convert DeviceCapability enum to dictionary
-                cap_dict = {}
-                for cap in DeviceCapability:
-                    if cap != DeviceCapability.NONE:
-                        cap_dict[cap.name] = bool(cap in self._detected_capabilities)
-                capabilities["detected_capabilities"] = cap_dict
+                # Convert to set if needed for consistent operations
+                if not isinstance(self._detected_capabilities, set):
+                    # Convert from IntFlag to Set (legacy compatibility)
+                    capability_set = set()
+                    for cap in DeviceCapability:
+                        if cap != DeviceCapability.NONE and (self._detected_capabilities & cap):
+                            capability_set.add(cap)
+                    self._detected_capabilities = capability_set
+                
+                capabilities["capabilities"] = {
+                    "supported": [cap.name for cap in self._detected_capabilities],
+                    "failed": [],  # No failed capability tracking in legacy mode
+                    "detection_date": None
+                }
+            else:
+                capabilities["capabilities"] = {
+                    "supported": [],
+                    "failed": [],
+                    "detection_date": None
+                }
             
-            # Get supported programs if program catalog is supported
-            if self._detected_capabilities and DeviceCapability.PROGRAM_CATALOG in self._detected_capabilities:
+            # Check for program catalog support
+            if DeviceCapability.PROGRAM_CATALOG in self._detected_capabilities:
                 try:
                     programs = await self.get_available_programs()
                     capabilities["supported_programs"] = programs
+                    capabilities["program_catalog_available"] = True
                 except Exception as e:
                     logger.warning(f"Could not get available programs: {e}")
                     capabilities["supported_programs"] = []
+                    capabilities["program_catalog_available"] = False
             else:
                 capabilities["supported_programs"] = []
+                capabilities["program_catalog_available"] = False
                 
             # Cache capabilities (they rarely change)
             self._capabilities = capabilities
@@ -1019,6 +1075,9 @@ class Appliance:
 
     async def has_capability(self, capability: DeviceCapability) -> bool:
         """Check if the appliance has a specific capability.
+        
+        Uses DeviceProfile information if available for efficient checking,
+        otherwise falls back to runtime detection.
         
         Parameters
         ----------
@@ -1030,20 +1089,78 @@ class Appliance:
         bool
             True if the device has the capability, False otherwise
         """
-        # Check device profile first if available
+        # Use DeviceProfile method if available
         if self._device_profile:
             return self._device_profile.has_capability(capability)
         
-        # Check detected capabilities
-        if self._detected_capabilities is None:
-            try:
-                self._detected_capabilities = await self._client.detect_capabilities(self.id)
-            except Exception as e:
-                logger.warning(f"Could not detect capabilities: {e}")
-                # Check global detector as fallback
-                return detector.has_capability(self.id, capability)
+        # Fallback to detected capabilities cache
+        if self._detected_capabilities is not None:
+            return capability in self._detected_capabilities
         
-        return bool(self._detected_capabilities and capability in self._detected_capabilities)
+        # Last resort: runtime detection with global detector fallback
+        try:
+            # Try to detect capabilities dynamically
+            detected_caps, _ = await self._client.detect_capabilities_as_sets(self.id)
+            self._detected_capabilities = detected_caps
+            return capability in detected_caps
+        except Exception as e:
+            logger.warning(f"Could not detect capabilities: {e}")
+            # Try to use global detector as final fallback
+            return detector.has_capability(self.id, capability)
+    
+    def has_any_capability(self, *capabilities: DeviceCapability) -> bool:
+        """Check if the appliance has any of the specified capabilities.
+        
+        Uses Set intersection for efficient checking.
+        
+        Parameters
+        ----------
+        *capabilities : DeviceCapability
+            The capabilities to check
+            
+        Returns
+        -------
+        bool
+            True if the device has any of the capabilities, False otherwise
+        """
+        # Use DeviceProfile method if available
+        if self._device_profile:
+            return self._device_profile.has_any_capability(*capabilities)
+        
+        # Fallback using detected capabilities
+        if self._detected_capabilities is None:
+            # Return False if no capabilities detected yet
+            return False
+        
+        # Use set intersection for efficient checking
+        return bool(self._detected_capabilities.intersection(capabilities))
+    
+    def has_all_capabilities(self, *capabilities: DeviceCapability) -> bool:
+        """Check if the appliance has all of the specified capabilities.
+        
+        Uses Set subset operations for efficient checking.
+        
+        Parameters
+        ----------
+        *capabilities : DeviceCapability
+            The capabilities to check
+            
+        Returns
+        -------
+        bool
+            True if the device has all of the capabilities, False otherwise
+        """
+        # Use DeviceProfile method if available
+        if self._device_profile:
+            return self._device_profile.has_all_capabilities(*capabilities)
+        
+        # Fallback using detected capabilities
+        if self._detected_capabilities is None:
+            # Return False if no capabilities detected yet
+            return False
+        
+        # Use set subset operations for efficient checking
+        return set(capabilities).issubset(self._detected_capabilities)
 
     @classmethod
     async def from_profile(cls, client: MieleClient, profile: DeviceProfile) -> 'Appliance':
@@ -1066,6 +1183,39 @@ class Appliance:
             device_id=profile.device_id,
             device_profile=profile
         )
+
+    @classmethod
+    async def from_config_file(cls, config_path: str) -> 'Appliance':
+        """Create an Appliance instance directly from a configuration file.
+        
+        This is the main factory method for the configuration-driven service architecture.
+        It loads a device profile from a JSON file and creates both the client and appliance.
+        
+        Parameters
+        ----------
+        config_path : str
+            Path to the device profile JSON file
+            
+        Returns
+        -------
+        Appliance
+            New Appliance instance configured from the file
+            
+        Raises
+        ------
+        InvalidConfigurationError
+            If the configuration file is invalid
+        CorruptedConfigurationError
+            If the configuration file cannot be read
+        """
+        # Load the device profile from JSON
+        profile = load_device_profile(config_path)
+        
+        # Create client from profile
+        client = MieleClient.from_profile(profile)
+        
+        # Create appliance from profile
+        return await cls.from_profile(client, profile)
             
     async def get_settings(self) -> Dict[str, Any]:
         """Return all configurable settings for the appliance.
@@ -1164,87 +1314,66 @@ class Appliance:
         self._simulation_mode = SimulationMode.DISABLED
         logger.info("Simulation mode disabled")
         
-    def _simulate_response(self, operation: str) -> Any:
-        """Generate a simulated response for testing.
+    def _simulate_response(self, operation: str) -> Dict[str, Any]:
+        """Simulate a response for testing purposes.
         
         Parameters
         ----------
         operation : str
-            Operation being simulated
+            The operation being simulated
             
         Returns
         -------
-        Any
-            Simulated response
-            
-        Raises
-        ------
-        ApplianceError
-            If simulation mode is set to failure
+        Dict[str, Any]
+            Simulated response data
         """
-        if self._simulation_mode == SimulationMode.DISABLED:
-            return None
-            
-        if self._simulation_mode == SimulationMode.FAILURE:
-            raise ApplianceError(f"Simulated failure for operation: {operation}")
-            
-        # Return simulated data based on operation
+        # Basic simulation responses
         if operation == "get_state":
             return {
-                "status": "running",
-                "programPhase": "main",
-                "remainingTime": [1, 30],
-                "startTime": [0, 0],
-                "targetTemperature": [50, 0],
-                "temperature": [49, 5],
-                "elapsedTime": [0, 15],
+                "status": "Ready",
+                "program": None,
+                "remaining_time": 0,
+                "simulation": True
             }
-        elif operation == "get_summary":
-            # Create a minimal DeviceSummary-like object
-            return DeviceSummary(
-                id=self.id,
-                state={"status": "running"},
-                status={"programPhase": "main"}
-            )
-            
-        return {"simulated": True, "operation": operation}
+        elif operation == "start_program":
+            return {"success": True, "simulation": True}
+        elif operation == "stop_program":
+            return {"success": True, "simulation": True}
+        else:
+            return {"simulation": True, "operation": operation}
         
     # ------------------------------------------------------------------
     # Phase 3 retry logic
     
-    async def _with_retry(self, operation: Callable[[], Awaitable[Any]]) -> Any:
+    async def _with_retry(self, operation: Callable[[], Awaitable[T]]) -> T:
         """Execute an operation with retry logic.
         
         Parameters
         ----------
-        operation : Callable[[], Awaitable[Any]]
-            Async operation to execute
+        operation : Callable[[], Awaitable[T]]
+            The async operation to execute with retry
             
         Returns
         -------
-        Any
-            Result of the operation
+        T
+            The result of the operation
             
         Raises
         ------
         Exception
-            The last exception raised by the operation
+            If all retry attempts fail
         """
-        if self._simulation_mode != SimulationMode.DISABLED:
-            sim_result = self._simulate_response(operation.__name__)
-            if sim_result is not None:
-                return sim_result
-                
+        max_retries = 3
         last_exception = None
-        for attempt in range(self._max_retries):
+        for attempt in range(max_retries):
             try:
                 return await operation()
-            except Exception as exc:
-                last_exception = exc
-                logger.warning(f"Attempt {attempt+1}/{self._max_retries} failed: {exc}")
-                if attempt < self._max_retries - 1:
-                    # Exponential backoff
-                    await asyncio.sleep(self._retry_delay * (2 ** attempt))
+            except Exception as e:
+                last_exception = e
+                if attempt == max_retries - 1:
+                    raise
+                logger.warning(f"Operation failed (attempt {attempt + 1}/{max_retries}): {e}")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
         
         if last_exception:
             raise last_exception

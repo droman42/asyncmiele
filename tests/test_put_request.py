@@ -30,11 +30,21 @@ def client():
 
 
 @pytest.mark.asyncio
-@patch("aiohttp.ClientSession.put")
-async def test_put_request_204(mock_put, client):
+async def test_put_request_204(client):
     """PUT helper should return None on 204 response."""
-    mock_put.return_value = MockResponse(status=204)
-
-    result = await client._put_request("/Devices/0001/State", {"DeviceAction": 2})
-    assert result is None
-    mock_put.assert_called_once() 
+    # Mock the underlying _request_bytes method to return 204 status
+    with patch.object(client, '_request_bytes') as mock_request:
+        mock_request.return_value = (204, b"")
+        
+        result = await client._put_request("/Devices/0001/State", {"DeviceAction": 2})
+        
+        # Verify the result
+        assert result is None
+        
+        # Verify the request was made with correct parameters
+        mock_request.assert_called_once_with(
+            "PUT",
+            "/Devices/0001/State",
+            body={"DeviceAction": 2},
+            allowed_status=(200, 204)
+        ) 

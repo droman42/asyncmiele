@@ -11,7 +11,7 @@ The --start flag is opt-in and will fail unless you either:
 import asyncio
 import argparse
 
-from asyncmiele import MieleClient
+from asyncmiele import MieleClient, Appliance
 from asyncmiele.config import settings
 
 
@@ -28,7 +28,8 @@ async def main():
     client = MieleClient.from_hex(args.host, args.group_id, args.group_key)
 
     async with client:
-        appliance = await client.device(args.device)
+        # Create appliance with proper architecture - client as dependency
+        appliance = Appliance(client, args.device)
 
         print("Waking up …")
         await appliance.wake_up()

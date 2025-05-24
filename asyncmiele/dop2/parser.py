@@ -7,7 +7,7 @@ It supports parsing of various DOP2 leaves based on their unit and attribute.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast, Union
 
 from .binary import (
     read_u8, read_u16, read_u32, read_s8, read_s16, read_s32,
@@ -66,7 +66,7 @@ def detect_device_generation(payload: bytes) -> DeviceGenerationType:
     return DeviceGenerationType.DOP2
 
 
-def parse_leaf(unit: int, attribute: int, payload: bytes) -> Any:
+def parse_leaf(unit: int, attribute: int, payload: bytes) -> Union[DeviceCombinedState, SFValue, HoursOfOperation, CycleCounter, ProcessData, ProgramList, OptionList, SFList, DateTime, Dict[int, str], bytes]:
     """Parse a DOP2 leaf based on its unit and attribute.
     
     This function dispatches to the appropriate parser based on the unit/attribute
@@ -78,7 +78,7 @@ def parse_leaf(unit: int, attribute: int, payload: bytes) -> Any:
         payload: Raw binary payload from the leaf
         
     Returns:
-        Parsed representation of the leaf data
+        Parsed representation of the leaf data (type depends on the specific leaf)
         
     Raises:
         ValueError: If the payload is invalid for the expected structure
@@ -303,59 +303,4 @@ def _parse_sf_list(payload: bytes) -> SFList:
         sf_id = read_u16(payload, offset)
         sf_list.settings.append(sf_id)
     
-    return sf_list
-
-
-# ---------------------------------------------------------------------------
-# Helper functions for consumption stats
-# ---------------------------------------------------------------------------
-
-async def parse_consumption_stats(
-    client: Any,
-    device_id: str
-) -> ConsumptionStats:
-    """Parse consumption statistics from multiple DOP2 leaves.
-    
-    This is a higher-level helper that fetches and combines data from
-    multiple DOP2 leaves to create a comprehensive consumption statistics object.
-    
-    Args:
-        client: MieleClient instance with dop2_get_parsed method
-        device_id: Device ID to query
-        
-    Returns:
-        ConsumptionStats object with available data
-    """
-    hours: Optional[int] = None
-    cycles: Optional[int] = None
-    energy_wh: Optional[int] = None
-    water_l: Optional[int] = None
-    
-    try:
-        hours_result = await client.dop2_get_parsed(device_id, 2, 119)
-        if isinstance(hours_result, HoursOfOperation):
-            hours = hours_result.total_hours
-    except Exception:
-        pass
-    
-    try:
-        cycles_result = await client.dop2_get_parsed(device_id, 2, 138)
-        if isinstance(cycles_result, CycleCounter):
-            cycles = cycles_result.total_cycles
-    except Exception:
-        pass
-    
-    try:
-        process_data = await client.dop2_get_parsed(device_id, 2, 6195)
-        if isinstance(process_data, ProcessData):
-            energy_wh = process_data.energy_wh
-            water_l = process_data.water_l
-    except Exception:
-        pass
-    
-    return ConsumptionStats(
-        hours_of_operation=hours,
-        cycles_completed=cycles,
-        energy_wh_total=energy_wh,
-        water_l_total=water_l
-    ) 
+    return sf_list 

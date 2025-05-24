@@ -7,8 +7,8 @@ API version update) only need a single change.
 ACCEPT_HEADER: str = "application/vnd.miele.v1+json"
 """Default *Accept:* value used by all requests."""
 
-USER_AGENT: str = "Miele@mobile 2.3.3 Android"
-"""User-agent string copied from the original Android application."""
+USER_AGENT: str = "Miele@mobile 2.3.3 iOS"
+"""User-agent string copied from the MieleRESTServer reference implementation."""
 
-CONTENT_TYPE_JSON: str = "application/vnd.miele.v1+json; charset=utf-8"
-"""Content-Type for encrypted JSON bodies (PUT).""" 
+CONTENT_TYPE_JSON: str = "application / vnd.miele.v1 + json; charset = utf - 8"
+"""Content-Type for encrypted JSON bodies (PUT) - matches MieleRESTServer exactly.""" 

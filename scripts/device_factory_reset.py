@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional, Tuple
 
 from asyncmiele import (
     ConnectionManager, DeviceProfile, MieleCredentials, 
-    MieleDeviceConfig, DeviceResetter, MieleClient
+    DeviceResetter, MieleClient
 )
 from asyncmiele.exceptions.connection import DeviceResetError, ConnectionLostError
 from asyncmiele.utils.discovery import discover_devices
@@ -40,7 +40,7 @@ async def factory_reset_device(
         True if reset was successful
     """
     device_id = profile.device_id
-    host = profile.config.host
+    host = profile.host
     
     # User confirmation
     if confirm:
@@ -166,11 +166,6 @@ def load_profile(config_file: str, device_id: Optional[str] = None) -> Optional[
         else:
             device_config = devices[0]
             
-        # Create device configuration
-        config = MieleDeviceConfig(
-            host=device_config['host']
-        )
-        
         # Create credentials
         credentials = MieleCredentials(
             group_id=bytes.fromhex(device_config['group_id']),
@@ -180,7 +175,7 @@ def load_profile(config_file: str, device_id: Optional[str] = None) -> Optional[
         # Create profile
         profile = DeviceProfile(
             device_id=device_config['id'],
-            config=config,
+            host=device_config['host'],
             credentials=credentials
         )
         
@@ -279,7 +274,6 @@ def main():
     elif args.host and args.group_id and args.group_key:
         try:
             # Create profile from command line args
-            config = MieleDeviceConfig(host=args.host)
             credentials = MieleCredentials(
                 group_id=bytes.fromhex(args.group_id),
                 group_key=bytes.fromhex(args.group_key)
@@ -288,7 +282,7 @@ def main():
             device_id = args.device_id or args.host.replace(".", "_")
             profile = DeviceProfile(
                 device_id=device_id,
-                config=config,
+                host=args.host,
                 credentials=credentials
             )
         except Exception as e:

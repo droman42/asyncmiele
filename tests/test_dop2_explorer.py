@@ -12,72 +12,70 @@ from asyncmiele.dop2.explorer import DOP2Explorer
 
 
 @pytest.fixture
-def client():
-    """Create a mock client for testing."""
-    client = AsyncMock()
-    client.dop2_read_leaf = AsyncMock()
-    client.detect_device_generation = AsyncMock(return_value=DeviceGenerationType.DOP2)
-    return client
+def mock_data_provider():
+    """Create a mock data provider function for testing."""
+    mock_func = AsyncMock()
+    return mock_func
 
 
 @pytest.fixture
-def explorer(client):
-    """Create a DOP2Explorer with a mock client."""
-    return DOP2Explorer(client)
+def explorer(mock_data_provider):
+    """Create a DOP2Explorer with a mock data provider."""
+    return DOP2Explorer(mock_data_provider)
 
 
 @pytest.mark.asyncio
-async def test_explore_leaf(explorer, client):
+async def test_explore_leaf(explorer, mock_data_provider):
     """Test exploring a single leaf."""
     device_id = "test_device"
     unit = 2
     attribute = 256
     
-    # Mock the client to return some test data
-    test_data = b'\x00\x01\x00\x02\x00\x03'
-    client.dop2_read_leaf.return_value = test_data
+    # Mock the data provider to return some test data
+    test_data = "test_leaf_data"
+    mock_data_provider.return_value = test_data
     
     # Explore the leaf
     result = await explorer.explore_leaf(device_id, unit, attribute)
     
-    # Check that the client was called correctly
-    client.dop2_read_leaf.assert_called_once_with(device_id, unit, attribute, idx1=0, idx2=0)
+    # Check that the data provider was called correctly (uses positional args for idx1, idx2)
+    mock_data_provider.assert_called_once_with(device_id, unit, attribute, 0, 0)
     
-    # Check that the result is not None (actual parsing is tested elsewhere)
-    assert result is not None
+    # Check that the result matches what we expected
+    assert result == test_data
 
 
 @pytest.mark.asyncio
-async def test_explore_leaf_caching(explorer, client):
+async def test_explore_leaf_caching(explorer, mock_data_provider):
     """Test that leaf exploration results are cached."""
     device_id = "test_device"
     unit = 2
     attribute = 256
     
-    # Mock the client to return some test data
-    test_data = b'\x00\x01\x00\x02\x00\x03'
-    client.dop2_read_leaf.return_value = test_data
+    # Mock the data provider to return some test data
+    test_data = "test_leaf_data"
+    mock_data_provider.return_value = test_data
     
     # Explore the leaf twice
     result1 = await explorer.explore_leaf(device_id, unit, attribute)
     result2 = await explorer.explore_leaf(device_id, unit, attribute)
     
-    # Check that the client was called only once
-    client.dop2_read_leaf.assert_called_once()
+    # Check that the data provider was called only once
+    mock_data_provider.assert_called_once()
     
     # Check that both results are the same
     assert result1 is result2
 
 
 @pytest.mark.asyncio
-async def test_explore_leaf_failure(explorer, client):
+async def test_explore_leaf_failure(explorer, mock_data_provider):
     """Test handling of leaf exploration failures."""
     device_id = "test_device"
     unit = 2
     attribute = 999  # Non-existent leaf
     
-    # Mock the client to raise an exception
-    client.dop2_read_leaf.side_effect = Exception("Leaf not found")
+    # Mock the data provider to raise an exception
+    mock_data_provider.side_effect = Exception("Leaf not found")
     
     # Explore the leaf
     result = await explorer.explore_leaf(device_id, unit, attribute)
@@ -90,20 +88,20 @@ async def test_explore_leaf_failure(explorer, client):
 
 
 @pytest.mark.asyncio
-async def test_explore_unit(explorer, client):
+async def test_explore_unit(explorer, mock_data_provider):
     """Test exploring a unit with multiple leaves."""
     device_id = "test_device"
     unit = 2
     
-    # Mock the client to return data for some leaves and fail for others
-    async def mock_explore_leaf(dev_id, u, attr, idx1=0, idx2=0):
+    # Mock the data provider to return data for some leaves and fail for others
+    async def mock_provider(dev_id, u, attr, idx1=0, idx2=0):
         if u == unit and attr in [105, 256]:
             return f"Leaf {attr} data"
         else:
-            return None
+            raise Exception("Leaf not found")
     
-    # Replace the explore_leaf method with our mock
-    explorer.explore_leaf = AsyncMock(side_effect=mock_explore_leaf)
+    # Replace the data provider function
+    explorer._get_data = mock_provider
     
     # Explore the unit (only known leaves)
     leaves = await explorer.explore_unit(device_id, unit, known_only=True)
@@ -115,33 +113,37 @@ async def test_explore_unit(explorer, client):
 
 
 @pytest.mark.asyncio
-async def test_explore_device(explorer, client):
+async def test_explore_device(explorer, mock_data_provider):
     """Test exploring a complete device."""
     device_id = "test_device"
     
-    # Mock the explore_unit method to return some test data
-    async def mock_explore_unit(dev_id, unit, **kwargs):
-        if unit == 1:
-            return {2: "System info"}
-        elif unit == 2:
-            return {105: "SF Value", 256: "Combined state"}
-        elif unit == 14:
-            return {1570: "Program list"}
-        else:
-            return {}
+    # Mock device generation detection
+    with patch.object(explorer, 'detect_device_generation') as mock_detect:
+        mock_detect.return_value = DeviceGenerationType.DOP2
+        
+        # Mock the explore_unit method to return some test data
+        async def mock_explore_unit(dev_id, unit, **kwargs):
+            if unit == 1:
+                return {2: "System info"}
+            elif unit == 2:
+                return {105: "SF Value", 256: "Combined state"}
+            elif unit == 14:
+                return {1570: "Program list"}
+            else:
+                return {}
     
-    explorer.explore_unit = AsyncMock(side_effect=mock_explore_unit)
-    
-    # Explore the device
-    tree = await explorer.explore_device(device_id, known_only=True)
-    
-    # Check that the tree has the expected structure
-    assert tree.device_id == device_id
-    assert tree.generation == DeviceGenerationType.DOP2
-    assert 1 in tree.nodes
-    assert 2 in tree.nodes
-    assert 14 in tree.nodes
-    assert len(tree.nodes) == 3
+        explorer.explore_unit = AsyncMock(side_effect=mock_explore_unit)
+        
+        # Explore the device
+        tree = await explorer.explore_device(device_id, known_only=True)
+        
+        # Check that the tree has the expected structure
+        assert tree.device_id == device_id
+        assert tree.generation == DeviceGenerationType.DOP2
+        assert 1 in tree.nodes
+        assert 2 in tree.nodes
+        assert 14 in tree.nodes
+        assert len(tree.nodes) == 3
 
 
 @pytest.mark.asyncio

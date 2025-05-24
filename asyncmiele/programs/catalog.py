@@ -252,6 +252,48 @@ class ProgramCatalog(BaseModel):
             raise RuntimeError(f"Failed to parse catalogue file {path}: {exc}") from exc
 
         return cls.model_validate(raw)
+    
+    def to_dict(self) -> dict:
+        """Convert the catalog to a dictionary for DeviceProfile storage.
+        
+        Returns
+        -------
+        dict
+            Dictionary representation suitable for DeviceProfile.program_catalog
+        """
+        return self.model_dump()
+    
+    def get_all_programs(self) -> List[dict]:
+        """Get all programs as a list of dictionaries.
+        
+        This method provides a simple interface for getting program information
+        in a format suitable for API responses and DeviceProfile integration.
+        
+        Returns
+        -------
+        List[dict]
+            List of program dictionaries with id, name, and options
+        """
+        programs = []
+        for program in self.programs:
+            program_dict = {
+                "id": program.id,
+                "name": program.name,
+                "options": []
+            }
+            
+            for option in program.options:
+                option_dict = {
+                    "id": option.id,
+                    "name": option.name,
+                    "default": option.default,
+                    "allowed_values": option.allowed_values
+                }
+                program_dict["options"].append(option_dict)
+                
+            programs.append(program_dict)
+            
+        return programs
 
 
 # ---------------------------------------------------------------------------

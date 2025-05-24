@@ -229,86 +229,52 @@ async def test_fallback_get_program_catalog():
     assert result == expected_catalog
 
 
-def test_get_explorer():
-    """Test that get_explorer delegates to DOP2Client."""
+def test_create_dop2_explorer():
+    """Test that create_dop2_explorer returns a DOP2Explorer instance."""
     # Create MieleClient with the method we're testing
-    def get_explorer():
-        dop2_client = miele_client.get_dop2_client()
-        return dop2_client.get_explorer()
+    def create_dop2_explorer():
+        from asyncmiele.dop2.explorer import create_explorer_with_client
+        return create_explorer_with_client(miele_client)
     
     # Create the mock client
     miele_client = MagicMock()
-    miele_client.get_explorer = get_explorer
-    
-    # Create DOP2Client mock
-    dop2_client = MagicMock(spec=DOP2Client)
-    
-    # Set up the return value
-    explorer_mock = MagicMock(spec=DOP2Explorer)
-    dop2_client.get_explorer.return_value = explorer_mock
-    
-    # Set up the miele_client to return our mocked dop2_client
-    miele_client.get_dop2_client.return_value = dop2_client
+    miele_client.create_dop2_explorer = create_dop2_explorer
+    miele_client.get_parsed_dop2_leaf = AsyncMock()
     
     # Call the method
-    result = miele_client.get_explorer()
+    result = miele_client.create_dop2_explorer()
     
-    # Verify the correct methods were called
-    miele_client.get_dop2_client.assert_called_once()
-    dop2_client.get_explorer.assert_called_once()
-    assert result == explorer_mock
+    # Verify the result is a DOP2Explorer
+    from asyncmiele.dop2.explorer import DOP2Explorer
+    assert isinstance(result, DOP2Explorer)
 
 
 @pytest.mark.asyncio
-async def test_explore_dop2_tree():
-    """Test that explore_dop2_tree delegates to DOP2Client."""
-    # Create MieleClient with the method we're testing
-    async def explore_dop2_tree(device_id, max_unit=20, max_attribute=10000, known_only=False, concurrency=3):
-        dop2_client = miele_client.get_dop2_client()
-        explorer = dop2_client.get_explorer()
-        return await explorer.explore_device(
-            device_id,
-            max_unit=max_unit,
-            max_attribute=max_attribute,
-            known_only=known_only,
-            concurrency=concurrency
-        )
-    
+async def test_explore_dop2_tree_using_miele_client():
+    """Test that we can explore a DOP2 tree using MieleClient directly."""
     # Create the mock client
     miele_client = MagicMock()
-    miele_client.explore_dop2_tree = explore_dop2_tree
+    miele_client.get_parsed_dop2_leaf = AsyncMock()
+    miele_client.detect_device_generation = AsyncMock(return_value=DeviceGenerationType.DOP2)
     
-    # Create DOP2Client mock
-    dop2_client = MagicMock(spec=DOP2Client)
+    # Mock the create_dop2_explorer method to return a real explorer
+    def create_dop2_explorer():
+        from asyncmiele.dop2.explorer import create_explorer_with_client
+        return create_explorer_with_client(miele_client)
     
-    # Set up the explorer mock
-    explorer_mock = MagicMock(spec=DOP2Explorer)
-    dop2_client.get_explorer.return_value = explorer_mock
+    miele_client.create_dop2_explorer = create_dop2_explorer
     
-    # Set up the tree mock
-    tree_mock = MagicMock(spec=DOP2Tree)
-    explorer_mock.explore_device = AsyncMock(return_value=tree_mock)
+    # Create explorer and test that it works
+    explorer = miele_client.create_dop2_explorer()
     
-    # Set up the miele_client to return our mocked dop2_client
-    miele_client.get_dop2_client.return_value = dop2_client
+    # Mock some DOP2 leaf data
+    miele_client.get_parsed_dop2_leaf.side_effect = Exception("No such leaf")
     
-    # Call the method
-    result = await miele_client.explore_dop2_tree(
-        "0001",
-        max_unit=10,
-        max_attribute=5000,
-        known_only=True,
-        concurrency=2
-    )
+    # Try to explore a leaf (should handle the exception gracefully)
+    result = await explorer.explore_leaf("0001", 2, 256)
     
-    # Verify the correct methods were called
-    miele_client.get_dop2_client.assert_called_once()
-    dop2_client.get_explorer.assert_called_once()
-    explorer_mock.explore_device.assert_awaited_once_with(
-        "0001", 
-        max_unit=10, 
-        max_attribute=5000, 
-        known_only=True, 
-        concurrency=2
-    )
-    assert result == tree_mock 
+    # Should return None for failed leaf
+    assert result is None
+    
+    # Verify the client method was called
+    miele_client.get_parsed_dop2_leaf.assert_called() 

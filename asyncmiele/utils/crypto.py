@@ -117,10 +117,12 @@ def build_auth_header(
     else:
         body_bytes = body
 
-    # Construct the canonical payload string identical to observed device logic
-    # Order: METHOD, host+resource, Content-Type (may be empty), Accept, Date, body
+    # Construct the canonical payload string identical to MieleRESTServer
+    # MieleRESTServer uses resourcePath without leading slash, then {host}/{resourcePath}
+    # So we need to strip leading slash from resource for canonical string
+    resource_for_canonical = resource.lstrip('/')
     canonical = (
-        f"{method}\n{host}{resource}\n{content_type_header}\n{accept_header}\n{date}\n".encode(
+        f"{method}\n{host}/{resource_for_canonical}\n{content_type_header}\n{accept_header}\n{date}\n".encode(
             "ASCII"
         )
         + body_bytes
@@ -132,7 +134,7 @@ def build_auth_header(
     iv_bytes = bytes.fromhex(digest_hex)[:16]
 
     auth_header = f"MieleH256 {group_id.hex()}:{digest_hex}"
-    return auth_header, iv_bytes 
+    return auth_header, iv_bytes
 
 def pad_payload(payload: bytes, blocksize: int = 16) -> bytes:
     """Pad *payload* with ASCII space (0x20) to a multiple of *blocksize*."""

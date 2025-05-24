@@ -1,70 +1,59 @@
-"""DOP2 tree explorer for Miele devices.
+"""
+DOP2 tree explorer for comprehensive leaf exploration and analysis.
 
-This module provides functionality to recursively explore the DOP2 tree structure
-of Miele appliances. It can discover all available nodes and leaves, and build
-a complete map of the device's DOP2 structure.
+This module provides tools for systematically exploring the DOP2 tree structure
+of Miele devices, discovering available leaves, and analyzing their contents.
 """
 
 import asyncio
 import json
 import logging
-import time
-from typing import Dict, List, Set, Any, Optional, Tuple, cast
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Set, Tuple, Union
 
-from .models import (
-    DOP2Tree, DOP2Node, DeviceGenerationType
-)
-from .generation import detector
+from .models import DOP2Tree, DOP2Node, DeviceGenerationType
 from .parser import parse_leaf
 
 logger = logging.getLogger(__name__)
 
-# Common units to explore first (based on observed patterns)
-COMMON_UNITS = [1, 2, 3, 14]
-
-# Known leaf attributes for each unit (to try first before brute force)
-KNOWN_LEAVES = {
-    1: [2, 3, 4],                # System leaves
-    2: [105, 119, 138, 256, 286, 293, 1584, 6195],  # Core DOP2 leaves
-    3: [1000],                   # Semi-pro specific leaves
-    14: [1570, 1571, 2570]       # Legacy leaves
-}
-
-# Maximum attribute ID to try during brute force exploration
+# Maximum number of empty leaves before assuming no more exist
+MAX_EMPTY_LEAVES = 100
 MAX_ATTRIBUTE_ID = 10000
 
-# Maximum number of consecutive empty leaves before stopping exploration
-MAX_EMPTY_LEAVES = 50
+# Known DOP2 leaves organized by unit
+KNOWN_LEAVES = {
+    1: [2, 3, 4],  # System info, status, config
+    2: [105, 119, 138, 256, 286, 293, 1584, 6195],  # Core DOP2 leaves
+    3: [1000],  # Semi-pro config
+    14: [1570, 1571, 2570],  # Legacy leaves
+}
 
 
 class DOP2Explorer:
-    """Explorer for DOP2 tree structures.
+    """Comprehensive DOP2 tree explorer.
     
-    This class provides functionality to recursively explore the DOP2 tree structure
-    of Miele appliances. It can discover all available nodes and leaves, and build
-    a complete map of the device's DOP2 structure.
+    This class provides systematic exploration of the DOP2 tree structure,
+    discovering available leaves and analyzing their contents.
+    
+    Uses a simple data provider function for leaf reading while keeping
+    all DOP2 protocol knowledge internal.
     """
     
-    def __init__(self, client_or_dop2client: Any):
-        """Initialize the explorer with a client.
+    def __init__(self, data_provider_func):
+        """Initialize the explorer.
         
         Args:
-            client_or_dop2client: MieleClient or DOP2Client instance
+            data_provider_func: Async function with signature:
+                async def provider(device_id: str, unit: int, attribute: int, 
+                                 idx1: int = 0, idx2: int = 0) -> Any
+                Should return parsed leaf data or raise exception if leaf doesn't exist.
         """
-        # Handle None as a special case for the global instance
-        if client_or_dop2client is None:
-            self.dop2_client = None
-        # Check if it's already a DOP2Client
-        elif hasattr(client_or_dop2client, 'read_leaf'):
-            self.dop2_client = client_or_dop2client
-        else:
-            # It's a MieleClient, get a DOP2Client from it
-            self.dop2_client = client_or_dop2client.get_dop2_client()
-            
+        self._get_data = data_provider_func
         self._explored_leaves: Dict[str, Dict[Tuple[int, int], Any]] = {}
         self._failed_leaves: Dict[str, Set[Tuple[int, int]]] = {}
         self._exploration_stats: Dict[str, Dict[str, Any]] = {}
         self._cache_enabled = True
+        
         
     def clear_cache(self, device_id: Optional[str] = None) -> None:
         """Clear the exploration cache.
@@ -112,10 +101,6 @@ class DOP2Explorer:
         Returns:
             Parsed leaf data if successful, None if the leaf doesn't exist
         """
-        # Check if dop2_client is initialized
-        if self.dop2_client is None:
-            raise RuntimeError("DOP2Explorer not initialized with a client")
-            
         # Check cache first if enabled
         cache_key = (unit, attribute)
         if self._cache_enabled and device_id in self._explored_leaves and cache_key in self._explored_leaves[device_id]:
@@ -132,11 +117,8 @@ class DOP2Explorer:
             self._failed_leaves[device_id] = set()
             
         try:
-            # Try to read the leaf
-            raw_data = await self.dop2_client.read_leaf(device_id, unit, attribute, idx1=idx1, idx2=idx2)
-            
-            # Parse the leaf data
-            parsed_data = parse_leaf(unit, attribute, raw_data)
+            # Use DOP2LeafReader's methods
+            parsed_data = await self._get_data(device_id, unit, attribute, idx1, idx2)
             
             # Cache the result if enabled
             if self._cache_enabled:
@@ -226,6 +208,42 @@ class DOP2Explorer:
             
         return leaves
         
+    async def detect_device_generation(self, device_id: str) -> DeviceGenerationType:
+        """Detect device generation based on DOP2 leaf availability.
+        
+        This method contains DOP2 protocol knowledge about which leaves
+        are available on different device generations.
+        
+        Args:
+            device_id: Device identifier
+            
+        Returns:
+            Detected device generation type
+        """
+        # Test for DOP2 generation (leaf 2/256 - combined state)
+        try:
+            await self._get_data(device_id, 2, 256)
+            return DeviceGenerationType.DOP2
+        except Exception:
+            pass
+        
+        # Test for semi-pro generation (leaf 3/1000 - semi-pro config)
+        try:
+            await self._get_data(device_id, 3, 1000)
+            return DeviceGenerationType.SEMIPRO
+        except Exception:
+            pass
+        
+        # Test for legacy generation (leaf 14/1570 - legacy program list)
+        try:
+            await self._get_data(device_id, 14, 1570)
+            return DeviceGenerationType.LEGACY
+        except Exception:
+            pass
+        
+        # Default to DOP2 if we can't detect (most common)
+        return DeviceGenerationType.DOP2
+        
     async def explore_device(
         self,
         device_id: str,
@@ -247,7 +265,7 @@ class DOP2Explorer:
             DOP2Tree object containing the complete tree structure
         """
         # Initialize exploration stats
-        start_time = time.time()
+        start_time = datetime.now()
         self._exploration_stats[device_id] = {
             "start_time": start_time,
             "leaves_explored": 0,
@@ -257,12 +275,12 @@ class DOP2Explorer:
         # Create the tree structure
         tree = DOP2Tree(device_id=device_id)
         
-        # Detect device generation
-        generation = await self.dop2_client.detect_device_generation(device_id)
+        # Detect device generation using DOP2 protocol knowledge
+        generation = await self.detect_device_generation(device_id)
         tree.generation = generation
         
         # First explore common units
-        for unit in COMMON_UNITS:
+        for unit in KNOWN_LEAVES.keys():
             if unit > max_unit:
                 continue
                 
@@ -279,7 +297,7 @@ class DOP2Explorer:
                 
         # Then explore other units up to max_unit
         for unit in range(1, max_unit + 1):
-            if unit in tree.nodes or unit in COMMON_UNITS:
+            if unit in tree.nodes or unit in KNOWN_LEAVES:
                 continue
                 
             leaves = await self.explore_unit(
@@ -294,10 +312,10 @@ class DOP2Explorer:
                 tree.nodes[unit] = DOP2Node(unit=unit, leaves=leaves)
                 
         # Update exploration stats
-        end_time = time.time()
+        end_time = datetime.now()
         self._exploration_stats[device_id].update({
             "end_time": end_time,
-            "duration": end_time - start_time,
+            "duration": (end_time - start_time).total_seconds(),
             "leaves_found": sum(len(node.leaves) for node in tree.nodes.values()),
         })
         
@@ -324,7 +342,7 @@ class DOP2Explorer:
         # Convert tree to serializable format
         serializable = {
             "device_id": tree.device_id,
-            "generation": tree.generation.name,
+            "generation": tree.generation.name if hasattr(tree, 'generation') and tree.generation else "DOP2",
             "nodes": {},
         }
         
@@ -378,9 +396,17 @@ class DOP2Explorer:
             
         # Create tree object
         tree = DOP2Tree(
-            device_id=data["device_id"],
-            generation=DeviceGenerationType[data["generation"]]
+            device_id=data["device_id"]
         )
+        
+        # Set generation if available
+        if "generation" in data:
+            try:
+                tree.generation = DeviceGenerationType[data["generation"]]
+            except (KeyError, AttributeError):
+                tree.generation = DeviceGenerationType.DOP2
+        else:
+            tree.generation = DeviceGenerationType.DOP2
         
         # Populate nodes and leaves
         for unit_str, node_data in data["nodes"].items():
@@ -421,8 +447,8 @@ class DOP2Explorer:
                 "tree2": tree2.device_id,
             },
             "generations": {
-                "tree1": tree1.generation.name,
-                "tree2": tree2.generation.name,
+                "tree1": tree1.generation.name if hasattr(tree1, 'generation') and tree1.generation else "DOP2",
+                "tree2": tree2.generation.name if hasattr(tree2, 'generation') and tree2.generation else "DOP2",
             },
             "units": {
                 "only_in_tree1": [u for u in tree1.nodes if u not in tree2.nodes],
@@ -473,14 +499,55 @@ class DOP2Explorer:
         return differences
 
 
-# Global instance for shared use
-explorer = DOP2Explorer(None)
+# Global instance for shared use - can be initialized with None
+explorer: Optional[DOP2Explorer] = None
 
-def set_client(client: Any) -> None:
+def set_client(client) -> None:
     """Set the client for the global explorer instance.
     
     Args:
-        client: MieleClient or DOP2Client instance
+        client: Any object with a get_parsed_dop2_leaf method
     """
     global explorer
-    explorer = DOP2Explorer(client) 
+    
+    # Create a simple data provider function from the client
+    async def data_provider(device_id: str, unit: int, attribute: int, idx1: int = 0, idx2: int = 0):
+        return await client.get_parsed_dop2_leaf(device_id, unit, attribute, idx1, idx2)
+    
+    explorer = DOP2Explorer(data_provider)
+
+
+def create_explorer_with_client(miele_client) -> DOP2Explorer:
+    """Create a DOP2Explorer using a MieleClient.
+    
+    Args:
+        miele_client: MieleClient instance with get_parsed_dop2_leaf method
+        
+    Returns:
+        DOP2Explorer instance
+    """
+    # Create a simple data provider function
+    async def data_provider(device_id: str, unit: int, attribute: int, idx1: int = 0, idx2: int = 0):
+        return await miele_client.get_parsed_dop2_leaf(device_id, unit, attribute, idx1, idx2)
+    
+    return DOP2Explorer(data_provider)
+
+
+def create_mock_explorer(mock_data: Dict[Tuple[int, int], Any] = None) -> DOP2Explorer:
+    """Create a DOP2Explorer with mock data for testing.
+    
+    Args:
+        mock_data: Dictionary mapping (unit, attribute) -> parsed_data
+        
+    Returns:
+        DOP2Explorer instance with mock data
+    """
+    mock_data = mock_data or {}
+    
+    async def mock_data_provider(device_id: str, unit: int, attribute: int, idx1: int = 0, idx2: int = 0):
+        key = (unit, attribute)
+        if key in mock_data:
+            return mock_data[key]
+        raise Exception(f"Mock leaf {unit}/{attribute} not found")
+    
+    return DOP2Explorer(mock_data_provider) 

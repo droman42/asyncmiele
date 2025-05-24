@@ -1,11 +1,12 @@
-"""Client for interacting with DOP2 protocol on Miele devices.
+"""
+DOP2 protocol client for Miele devices.
 
-This module provides the DOP2Client class, which encapsulates all DOP2-specific
-operations and knowledge, providing a clean interface for working with the DOP2 protocol.
+This module provides protocol-level operations for DOP2 without HTTP dependencies.
+The actual HTTP communication is handled by MieleClient.
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Union
 from urllib.parse import quote
 
 from asyncmiele.dop2.binary import write_u16
@@ -22,10 +23,10 @@ from asyncmiele.enums import DeviceType
 logger = logging.getLogger(__name__)
 
 class DOP2Client:
-    """Client for interacting with DOP2 protocol on Miele devices.
+    """Pure protocol handler for DOP2 operations.
     
-    This class encapsulates all DOP2-specific operations and knowledge,
-    providing a clean interface for working with the DOP2 protocol.
+    This class handles DOP2 protocol operations without making HTTP calls.
+    All HTTP communication is delegated to MieleClient.
     """
     
     # System leaves (Unit 1)
@@ -51,57 +52,12 @@ class DOP2Client:
     LEAF_LEGACY_OPTION_LIST = (14, 1571)
     LEAF_LEGACY_STRING_TABLE = (14, 2570)
     
-    def __init__(self, client):
-        """Initialize the DOP2Client.
-        
-        Args:
-            client: MieleClient instance for HTTP communication
-        """
-        self.client = client
-        self._cache = {}  # Optional cache for leaf data
+    def __init__(self):
+        """Initialize the DOP2Client as a pure protocol handler."""
+        self._cache = {}  # Optional cache for leaf metadata
 
-    async def read_leaf(self, device_id: str, unit: int, attribute: int, 
-                      idx1: int = 0, idx2: int = 0) -> bytes:
-        """Read raw data from a DOP2 leaf.
-        
-        Args:
-            device_id: Device identifier
-            unit: DOP2 unit number
-            attribute: DOP2 attribute number
-            idx1: First index parameter
-            idx2: Second index parameter
-            
-        Returns:
-            Raw binary data from the leaf
-        """
-        path = self._build_leaf_path(device_id, unit, attribute, idx1, idx2)
-        result = await self.client._get_raw(path)
-        
-        # Register successful leaf access with generation detector
-        detector.register_leaf(device_id, unit, attribute)
-        
-        return result
-
-    async def write_leaf(self, device_id: str, unit: int, attribute: int, 
-                       payload: bytes, idx1: int = 0, idx2: int = 0) -> None:
-        """Write data to a DOP2 leaf.
-        
-        Args:
-            device_id: Device identifier
-            unit: DOP2 unit number
-            attribute: DOP2 attribute number
-            payload: Binary data to write
-            idx1: First index parameter
-            idx2: Second index parameter
-        """
-        path = self._build_leaf_path(device_id, unit, attribute, idx1, idx2)
-        await self.client._put_request(path, payload)
-        
-        # Register successful leaf access with generation detector
-        detector.register_leaf(device_id, unit, attribute)
-
-    def _build_leaf_path(self, device_id: str, unit: int, attribute: int, 
-                       idx1: int, idx2: int) -> str:
+    def build_leaf_path(self, device_id: str, unit: int, attribute: int, 
+                       idx1: int = 0, idx2: int = 0) -> str:
         """Build the resource path for a DOP2 leaf.
         
         Args:
@@ -116,22 +72,18 @@ class DOP2Client:
         """
         return f"/Devices/{quote(device_id, safe='')}/DOP2/{unit}/{attribute}?idx1={idx1}&idx2={idx2}"
 
-    async def get_parsed(self, device_id: str, unit: int, attribute: int,
-                       idx1: int = 0, idx2: int = 0) -> Any:
-        """Get parsed data from a DOP2 leaf.
+    def parse_leaf_response(self, unit: int, attribute: int, raw_data: bytes) -> Union[Dict[str, Any], List[Any], str, int, float, bytes]:
+        """Parse raw DOP2 leaf data using registered parsers.
         
         Args:
-            device_id: Device identifier
             unit: DOP2 unit number
             attribute: DOP2 attribute number
-            idx1: First index parameter
-            idx2: Second index parameter
+            raw_data: Raw binary data from the leaf
             
         Returns:
-            Parsed leaf data
+            Parsed leaf data (type depends on the specific leaf)
         """
-        raw = await self.read_leaf(device_id, unit, attribute, idx1=idx1, idx2=idx2)
-        return parse_leaf(unit, attribute, raw)
+        return parse_leaf(unit, attribute, raw_data)
 
     def build_sf_value_payload(self, sf_id: int, value: int) -> bytes:
         """Build a binary payload for setting an SF value.
@@ -158,86 +110,78 @@ class DOP2Client:
         """
         return build_program_selection(program_id, options)
         
-    async def detect_generation(self, device_id: str) -> DeviceGenerationType:
-        """Detect the generation of a Miele device.
+    def detect_generation_from_leaves(self, device_id: str) -> DeviceGenerationType:
+        """Detect device generation based on registered leaf access.
+        
+        This method uses the generation detector's registry to determine
+        device generation without making any HTTP calls.
         
         Args:
             device_id: Device identifier
             
         Returns:
-            Detected device generation
+            Detected device generation type
         """
-        # If we already have leaves registered, use those
-        if detector.get_available_leaves(device_id):
-            return detector.detect_generation(device_id)
-        
-        # Otherwise, try to probe some common leaves to determine generation
-        try:
-            # Try DOP2 leaf
-            await self.read_leaf(device_id, *self.LEAF_COMBINED_STATE)
-        except Exception:
-            pass
-        
-        try:
-            # Try legacy leaf
-            await self.read_leaf(device_id, *self.LEAF_LEGACY_PROGRAM_LIST)
-        except Exception:
-            pass
-        
-        try:
-            # Try semipro leaf
-            await self.read_leaf(device_id, *self.LEAF_SEMIPRO_CONFIG)
-        except Exception:
-            pass
-        
-        # Now detect based on what succeeded
         return detector.detect_generation(device_id)
         
-    async def get_program_catalog(self, device_id: str) -> Dict[str, Any]:
-        """Extract program catalog data using correct DOP2 leaves.
+    def register_successful_leaf(self, device_id: str, unit: int, attribute: int) -> None:
+        """Register a successful leaf access with the generation detector.
         
         Args:
             device_id: Device identifier
-            
-        Returns:
-            Program catalog dictionary
+            unit: DOP2 unit number  
+            attribute: DOP2 attribute number
         """
-        # Try the primary method first
-        try:
-            return await self._get_program_catalog_primary(device_id)
-        except Exception as e:
-            logger.debug(f"Failed to get program catalog using primary method: {e}")
-            # Fall back to legacy method
-            return await self._get_program_catalog_legacy(device_id)
+        detector.register_leaf(device_id, unit, attribute)
+        
+    def get_leaf_constants(self) -> Dict[str, Tuple[int, int]]:
+        """Get all known leaf constants.
+        
+        Returns:
+            Dictionary mapping leaf names to (unit, attribute) tuples
+        """
+        return {
+            'SYSTEM_INFO': self.LEAF_SYSTEM_INFO,
+            'SYSTEM_STATUS': self.LEAF_SYSTEM_STATUS,
+            'SYSTEM_CONFIG': self.LEAF_SYSTEM_CONFIG,
+            'COMBINED_STATE': self.LEAF_COMBINED_STATE,
+            'SF_VALUE': self.LEAF_SF_VALUE,
+            'PROGRAM_LIST': self.LEAF_PROGRAM_LIST,
+            'HOURS_OF_OPERATION': self.LEAF_HOURS_OF_OPERATION,
+            'CYCLE_COUNTER': self.LEAF_CYCLE_COUNTER,
+            'CONSUMPTION_STATS': self.LEAF_CONSUMPTION_STATS,
+            'DEVICE_STATE': self.LEAF_DEVICE_STATE,
+            'DEVICE_IDENT': self.LEAF_DEVICE_IDENT,
+            'SEMIPRO_CONFIG': self.LEAF_SEMIPRO_CONFIG,
+            'LEGACY_PROGRAM_LIST': self.LEAF_LEGACY_PROGRAM_LIST,
+            'LEGACY_OPTION_LIST': self.LEAF_LEGACY_OPTION_LIST,
+            'LEGACY_STRING_TABLE': self.LEAF_LEGACY_STRING_TABLE,
+        }
 
-    async def _get_program_catalog_primary(self, device_id: str) -> Dict[str, Any]:
-        """Extract program catalog using leaf 2/1584.
+    def create_explorer(self) -> DOP2Explorer:
+        """Create a DOP2Explorer instance that can work with this protocol handler.
+        
+        Returns:
+            DOP2Explorer instance
+        """
+        return DOP2Explorer()
+        
+    def parse_program_catalog_primary(self, program_list_data: Any, device_type: str) -> Dict[str, Any]:
+        """Parse program catalog from primary method data.
         
         Args:
-            device_id: Device identifier
+            program_list_data: Parsed data from leaf 2/1584
+            device_type: Device type string
             
         Returns:
             Program catalog dictionary
         """
-        # First get the program IDs from the correct leaf
-        program_list_data = await self.get_parsed(device_id, *self.LEAF_PROGRAM_LIST)
-        
         if not isinstance(program_list_data, dict) or "programIds" not in program_list_data:
             raise ValueError("Invalid response format from program list leaf 2/1584")
             
         program_ids = program_list_data["programIds"]
         if not program_ids:
-            return {"device_type": "unknown", "programs": []}
-            
-        # Get device info for the device type
-        ident = await self.client.get_device_ident(device_id)
-        if isinstance(ident.device_type, int):
-            try:
-                device_type = DeviceType(ident.device_type).name
-            except ValueError:
-                device_type = f"unknown_{ident.device_type}"
-        else:
-            device_type = ident.device_type or ident.tech_type or "unknown"
+            return {"device_type": device_type, "programs": []}
             
         # Build the result structure
         programs = []
@@ -250,150 +194,86 @@ class DOP2Client:
                 "name": f"Program_{pid}",  # Default name if no string table
                 "options": []
             }
-            
-            # Try to get options using leaf 2/105 with program ID as index
-            try:
-                options_data = await self.get_parsed(device_id, *self.LEAF_SF_VALUE, idx1=pid)
-                if isinstance(options_data, dict) and "options" in options_data:
-                    program["options"] = options_data["options"]
-            except Exception:
-                # If options can't be retrieved, continue with empty options list
-                pass
-                
             programs.append(program)
             
         return {
             "device_type": device_type,
+            "extraction_method": "dop2_new",
             "programs": programs
         }
-
-    async def _get_program_catalog_legacy(self, device_id: str) -> Dict[str, Any]:
-        """Extract program catalog using legacy leaves 14/1570, 14/1571, and 14/2570.
+        
+    def parse_program_catalog_legacy(self, program_list: Any, option_lists: Dict[int, Any], 
+                                   string_table: Dict[int, str], device_type: str) -> Dict[str, Any]:
+        """Parse program catalog from legacy method data.
         
         Args:
-            device_id: Device identifier
+            program_list: Parsed data from leaf 14/1570
+            option_lists: Dictionary of parsed option lists by program ID
+            string_table: Parsed string table from leaf 14/2570
+            device_type: Device type string
             
         Returns:
             Program catalog dictionary
         """
-        try:
-            # First try with the old leaf IDs
-            leaf_1570 = await self.read_leaf(device_id, *self.LEAF_LEGACY_PROGRAM_LIST)
-            
-            programs = parse_program_list(leaf_1570)
-            
-            # Get options for each program
-            for prog in programs:
-                pid = prog["id"]
-                leaf_1571 = await self.read_leaf(device_id, *self.LEAF_LEGACY_OPTION_LIST, idx1=pid)
-                prog["options"] = parse_option_list(leaf_1571)
-            
-            # Resolve string names
-            string_blob = await self.read_leaf(device_id, *self.LEAF_LEGACY_STRING_TABLE)
-            str_map = build_string_map(string_blob)
-            
-            for p in programs:
-                p["name"] = str_map.get(p.pop("name_id", 0), f"program_{p['id']}")
-                for opt in p["options"]:
-                    opt["name"] = str_map.get(opt.pop("name_id", 0), f"opt_{opt['id']}")
-            
-            # Get device type
-            ident = await self.client.get_device_ident(device_id)
-            if isinstance(ident.device_type, int):
-                try:
-                    device_type = DeviceType(ident.device_type).name
-                except ValueError:
-                    device_type = f"unknown_{ident.device_type}"
-            else:
-                device_type = ident.device_type or ident.tech_type or "unknown"
+        programs = []
+        
+        if hasattr(program_list, 'programs'):
+            for prog_entry in program_list.programs:
+                program = {
+                    "id": prog_entry.program_id,
+                    "name": string_table.get(prog_entry.name_id, f"Program_{prog_entry.program_id}"),
+                    "options": []
+                }
                 
-            return {
-                "device_type": device_type,
-                "programs": programs
-            }
-        except Exception as e:
-            logger.debug(f"Failed to get program catalog using legacy method: {e}")
-            # If the old way fails, return empty catalog
-            return {"device_type": "unknown", "programs": []}
-            
-    async def get_consumption_stats(self, device_id: str) -> ConsumptionStats:
-        """Get consumption statistics for a device.
+                # Add options if available
+                if prog_entry.program_id in option_lists:
+                    option_list = option_lists[prog_entry.program_id]
+                    if hasattr(option_list, 'options'):
+                        for opt_entry in option_list.options:
+                            option = {
+                                "id": opt_entry.option_id,
+                                "name": string_table.get(opt_entry.name_id, f"Option_{opt_entry.option_id}"),
+                                "default": opt_entry.default
+                            }
+                            program["options"].append(option)
+                
+                programs.append(program)
+        
+        return {
+            "device_type": device_type,
+            "extraction_method": "dop2_legacy", 
+            "programs": programs
+        }
+        
+    def build_consumption_stats(self, hours_data: Any, cycles_data: Any, process_data: Any) -> ConsumptionStats:
+        """Build ConsumptionStats from individual leaf data.
         
         Args:
-            device_id: Device identifier
+            hours_data: Parsed data from hours of operation leaf
+            cycles_data: Parsed data from cycle counter leaf  
+            process_data: Parsed data from process data leaf
             
         Returns:
-            ConsumptionStats object
+            Combined ConsumptionStats object
         """
         hours: Optional[int] = None
         cycles: Optional[int] = None
         energy_wh: Optional[int] = None
         water_l: Optional[int] = None
         
-        try:
-            hours_result = await self.get_parsed(device_id, *self.LEAF_HOURS_OF_OPERATION)
-            if isinstance(hours_result, HoursOfOperation):
-                hours = hours_result.total_hours
-        except Exception:
-            pass
-        
-        try:
-            cycles_result = await self.get_parsed(device_id, *self.LEAF_CYCLE_COUNTER)
-            if isinstance(cycles_result, CycleCounter):
-                cycles = cycles_result.total_cycles
-        except Exception:
-            pass
-        
-        try:
-            process_data = await self.get_parsed(device_id, *self.LEAF_CONSUMPTION_STATS)
-            if isinstance(process_data, ProcessData):
-                energy_wh = process_data.energy_wh
-                water_l = process_data.water_l
-        except Exception:
-            pass
+        if isinstance(hours_data, HoursOfOperation):
+            hours = hours_data.total_hours
+            
+        if isinstance(cycles_data, CycleCounter):
+            cycles = cycles_data.total_cycles
+            
+        if isinstance(process_data, ProcessData):
+            energy_wh = process_data.energy_wh
+            water_l = process_data.water_l
         
         return ConsumptionStats(
             hours_of_operation=hours,
             cycles_completed=cycles,
             energy_wh_total=energy_wh,
             water_l_total=water_l
-        )
-        
-    async def get_setting(self, device_id: str, sf_id: int) -> SFValue:
-        """Get a setting value.
-        
-        Args:
-            device_id: Device identifier
-            sf_id: Setting ID
-            
-        Returns:
-            SFValue object
-        """
-        parsed = await self.get_parsed(device_id, *self.LEAF_SF_VALUE, idx1=sf_id)
-        if not isinstance(parsed, SFValue):
-            raise ValueError("Leaf did not return SFValue structure")
-        return parsed
-
-    async def set_setting(self, device_id: str, sf_id: int, new_value: int) -> None:
-        """Set a setting value.
-        
-        Args:
-            device_id: Device identifier
-            sf_id: Setting ID
-            new_value: New value to set
-        """
-        sf = await self.get_setting(device_id, sf_id)
-        
-        if not (sf.minimum <= new_value <= sf.maximum):
-            raise ValueError(f"Value {new_value} outside allowed range {sf.range}")
-        
-        payload = self.build_sf_value_payload(sf_id, new_value)
-        await self.write_leaf(device_id, *self.LEAF_SF_VALUE, payload, idx1=sf_id)
-        
-    def get_explorer(self) -> DOP2Explorer:
-        """Get a DOP2Explorer instance configured with this client.
-        
-        Returns:
-            DOP2Explorer instance
-        """
-        return DOP2Explorer(self) 
+        ) 

@@ -14,7 +14,7 @@ from .models import (
 )
 
 from .parser import (
-    parse_leaf, detect_device_generation, parse_consumption_stats,
+    parse_leaf, detect_device_generation,
     register_parser
 )
 
@@ -33,7 +33,7 @@ from .programs import (
 from .generation import GenerationDetector, detector
 
 from .explorer import (
-    DOP2Explorer, explorer, set_client, COMMON_UNITS, KNOWN_LEAVES,
+    DOP2Explorer, explorer, set_client, KNOWN_LEAVES,
     MAX_ATTRIBUTE_ID, MAX_EMPTY_LEAVES
 )
 
@@ -53,7 +53,7 @@ __all__ = [
     "DeviceGenerationType", "DOP2Node", "DOP2Tree",
     
     # Parser functions
-    "parse_leaf", "detect_device_generation", "parse_consumption_stats",
+    "parse_leaf", "detect_device_generation",
     "register_parser",
     
     # Binary utilities
@@ -70,7 +70,7 @@ __all__ = [
     "GenerationDetector", "detector",
     
     # Tree explorer
-    "DOP2Explorer", "explorer", "set_client", "COMMON_UNITS", "KNOWN_LEAVES",
+    "DOP2Explorer", "explorer", "set_client", "KNOWN_LEAVES",
     "MAX_ATTRIBUTE_ID", "MAX_EMPTY_LEAVES",
     
     # Tree visualizer

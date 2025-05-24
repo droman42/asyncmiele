@@ -16,6 +16,8 @@ from asyncmiele.connection.health import ConnectionHealthMonitor, ConnectionStat
 from asyncmiele.models.device_profile import DeviceProfile
 from asyncmiele.exceptions.connection import ConnectionLostError, ReconnectionError
 from asyncmiele.api.client import MieleClient
+from asyncmiele.exceptions.network import NetworkConnectionError, NetworkTimeoutError
+from asyncmiele.exceptions.connection import ConnectionException
 
 logger = logging.getLogger(__name__)
 
@@ -242,9 +244,6 @@ class ConnectionManager:
             True if it's likely a connection error
         """
         # Check for common connection error types
-        from asyncmiele.exceptions.network import NetworkConnectionError, NetworkTimeoutError
-        from asyncmiele.exceptions.connection import ConnectionException
-        
         if isinstance(exception, (NetworkConnectionError, NetworkTimeoutError, ConnectionException)):
             return True
             
@@ -262,26 +261,25 @@ class ConnectionManager:
         return any(keyword in error_msg for keyword in connection_keywords)
         
     async def _try_reconnect(self, device_id: str) -> bool:
-        """Try to reconnect to a device.
+        """Attempt to reconnect to a device.
         
         Args:
-            device_id: ID of the device
+            device_id: Device to reconnect to
             
         Returns:
             True if reconnection was successful
         """
-        if device_id not in self._clients or device_id not in self._profiles:
-            return False
-            
-        logger.info(f"Attempting to reconnect to device {device_id}")
-        
         try:
-            # Get the profile
+            if device_id not in self._profiles:
+                logger.error(f"Cannot reconnect to {device_id}: no profile available")
+                return False
+            
             profile = self._profiles[device_id]
             
-            # Close the existing client
-            old_client = self._clients[device_id]
-            await old_client.close()
+            # Close existing client if any
+            if device_id in self._clients:
+                await self._clients[device_id].close()
+                del self._clients[device_id]
             
             # Create a new client
             new_client = MieleClient.from_profile(profile)
@@ -370,4 +368,116 @@ class ConnectionManager:
             exc: Exception
             tb: Traceback
         """
-        await self.stop() 
+        await self.stop()
+        
+    def create_client_from_profile(self, profile: DeviceProfile) -> MieleClient:
+        """Create a client from a device profile (Phase 3 enhancement).
+        
+        This method provides direct DeviceProfile support for the configuration-driven
+        service architecture.
+        
+        Args:
+            profile: DeviceProfile with complete device configuration
+            
+        Returns:
+            MieleClient configured from the profile
+        """
+        return MieleClient.from_profile(profile)
+    
+    def validate_profile(self, profile: DeviceProfile) -> bool:
+        """Validate a DeviceProfile configuration (Phase 3 enhancement).
+        
+        Validates that the profile contains all necessary information for
+        creating a working client connection.
+        
+        Args:
+            profile: DeviceProfile to validate
+            
+        Returns:
+            True if the profile is valid, False otherwise
+        """
+        try:
+            # Test basic model validation
+            profile.model_validate(profile.model_dump())
+            
+            # Test credential format
+            if not profile.credentials.group_id or not profile.credentials.group_key:
+                return False
+            
+            # Test connection parameters (direct access from DeviceProfile)
+            if not profile.host or not profile.device_id:
+                return False
+            
+            # Test timeout value
+            if profile.timeout <= 0:
+                return False
+                
+            return True
+        except Exception:
+            return False
+    
+    async def add_device_from_profile(self, profile: DeviceProfile) -> MieleClient:
+        """Add a device to the connection manager from a DeviceProfile (Phase 3 enhancement).
+        
+        This is the primary method for adding devices in the configuration-driven
+        service architecture.
+        
+        Args:
+            profile: Complete DeviceProfile configuration
+            
+        Returns:
+            MieleClient for the device
+            
+        Raises:
+            ValueError: If the profile is invalid
+            ConnectionLostError: If connection cannot be established
+        """
+        # Validate profile first
+        if not self.validate_profile(profile):
+            raise ValueError(f"Invalid device profile for device {profile.device_id}")
+        
+        # Store profile and get client
+        return await self.get_client(profile.device_id, profile)
+    
+    async def get_device_capabilities(self, device_id: str) -> Dict[str, Any]:
+        """Get comprehensive capability information for a device (Phase 3 enhancement).
+        
+        Uses DeviceProfile information when available for efficient capability reporting.
+        
+        Args:
+            device_id: Device identifier
+            
+        Returns:
+            Comprehensive capability information including supported and failed capabilities
+        """
+        # Check if we have a profile with capability information
+        if device_id in self._profiles:
+            profile = self._profiles[device_id]
+            return {
+                "supported": [cap.name for cap in profile.capabilities],
+                "failed": [cap.name for cap in profile.failed_capabilities],
+                "detection_date": profile.capability_detection_date.isoformat() if profile.capability_detection_date else None,
+                "source": "device_profile"
+            }
+        
+        # Fallback to client-based detection if profile not available
+        if device_id in self._clients:
+            client = self._clients[device_id]
+            try:
+                supported, failed = await client.detect_capabilities_as_sets(device_id)
+                return {
+                    "supported": [cap.name for cap in supported],
+                    "failed": [cap.name for cap in failed],
+                    "detection_date": None,
+                    "source": "runtime_detection"
+                }
+            except Exception as e:
+                logger.warning(f"Failed to detect capabilities for {device_id}: {e}")
+                return {
+                    "supported": [],
+                    "failed": [],
+                    "detection_date": None,
+                    "source": "detection_failed"
+                }
+        
+        raise ValueError(f"No client or profile found for device {device_id}") 

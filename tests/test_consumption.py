@@ -1,10 +1,10 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from asyncmiele import MieleClient
-from asyncmiele.dop2.models import ConsumptionStats, TariffConfig
+from asyncmiele.dop2.models import ConsumptionStats, TariffConfig, HoursOfOperation, CycleCounter, ProcessData
 
 
 @pytest.fixture
@@ -20,21 +20,21 @@ def client():
 async def test_consumption_stats_basic(client):
     async def fake_parsed(device_id: str, unit: int, attribute: int, *, idx1: int = 0, idx2: int = 0):
         if (unit, attribute) == (2, 119):
-            return 100  # hours
+            return HoursOfOperation(total_hours=100)  # Return proper object
         if (unit, attribute) == (2, 138):
-            return 25   # cycles
+            return CycleCounter(total_cycles=25)   # Return proper object
         if (unit, attribute) == (2, 6195):
-            return {"energy_wh_total": 123456, "water_l_total": 789}
+            return ProcessData(energy_wh=123456, water_l=789, duration_s=3600)  # Return proper object
         raise ValueError("Unexpected leaf")
 
-    client.dop2_get_parsed = AsyncMock(side_effect=fake_parsed)
-
-    stats = await client.get_consumption_stats("0001")
-    assert isinstance(stats, ConsumptionStats)
-    assert stats.hours_of_operation == 100
-    assert stats.cycles_completed == 25
-    assert stats.energy_wh_total == 123456
-    assert stats.water_l_total == 789
+    # Mock the correct method name
+    with patch.object(client, 'get_parsed_dop2_leaf', side_effect=fake_parsed):
+        stats = await client.get_consumption_stats("0001")
+        assert isinstance(stats, ConsumptionStats)
+        assert stats.hours_of_operation == 100
+        assert stats.cycles_completed == 25
+        assert stats.energy_wh_total == 123456
+        assert stats.water_l_total == 789
 
 
 @pytest.mark.asyncio

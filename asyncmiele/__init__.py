@@ -9,7 +9,6 @@ from asyncmiele.api import MieleClient, MieleSetupClient
 from asyncmiele.capabilities import DeviceCapability
 from asyncmiele.models.device_profile import DeviceProfile
 from asyncmiele.models.credentials import MieleCredentials
-from asyncmiele.models.device_config import MieleDeviceConfig
 from asyncmiele.appliance import Appliance
 from asyncmiele.connection import ConnectionManager, ConnectionPool, ConnectionHealthMonitor, DeviceResetter
 from asyncmiele.connection.health import ConnectionState
@@ -20,7 +19,6 @@ __all__ = [
     'DeviceCapability',
     'DeviceProfile',
     'MieleCredentials',
-    'MieleDeviceConfig',
     'Appliance',
     'ConnectionManager',
     'ConnectionPool',

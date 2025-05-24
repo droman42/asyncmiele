@@ -16,7 +16,7 @@ from typing import Dict, Any, Optional
 
 from asyncmiele import (
     ConnectionManager, DeviceProfile, MieleCredentials, 
-    MieleDeviceConfig, MieleClient
+    MieleClient
 )
 from asyncmiele.dop2 import (
     DeviceGenerationType, DOP2Tree, DOP2Explorer, DOP2Visualizer,
@@ -55,7 +55,7 @@ async def visualize_device_tree(
         Dictionary with visualization results
     """
     device_id = profile.device_id
-    host = profile.config.host
+    host = profile.host
     
     # If using existing JSON, visualize directly
     if not explore_first and json_file:
@@ -180,11 +180,6 @@ def load_profile(config_file: str, device_id: Optional[str] = None) -> Optional[
         else:
             device_config = devices[0]
             
-        # Create device configuration
-        config = MieleDeviceConfig(
-            host=device_config['host']
-        )
-        
         # Create credentials
         credentials = MieleCredentials(
             group_id=bytes.fromhex(device_config['group_id']),
@@ -194,7 +189,7 @@ def load_profile(config_file: str, device_id: Optional[str] = None) -> Optional[
         # Create profile
         profile = DeviceProfile(
             device_id=device_config['id'],
-            config=config,
+            host=device_config['host'],
             credentials=credentials
         )
         

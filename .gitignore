@@ -118,7 +118,6 @@ dmypy.json
 .idea/
 
 # Credentials and secrets
-config.py
 *.pem
 *.key
 credentials.json 

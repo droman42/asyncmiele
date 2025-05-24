@@ -20,9 +20,9 @@ def client():
 async def test_parsed_device_state(client):
     # build fake payload 3x u16: 0, 1, 2
     payload = bytes([0, 0, 0, 1, 0, 2])
-    client.dop2_read_leaf = AsyncMock(return_value=payload)
+    client.read_dop2_leaf = AsyncMock(return_value=payload)
 
-    parsed = await client.dop2_get_parsed("0001", 2, 256)
+    parsed = await client.get_parsed_dop2_leaf("0001", 2, 256)
     assert isinstance(parsed, DeviceCombinedState)
     assert parsed.appliance_state == 0
     assert parsed.operation_state == 1
@@ -33,9 +33,9 @@ async def test_parsed_device_state(client):
 async def test_parsed_sf_value(client):
     # sf_id=100, current=10, min=0, max=20, default=5
     payload = bytes([0, 100, 0, 10, 0, 0, 0, 20, 0, 5])
-    client.dop2_read_leaf = AsyncMock(return_value=payload)
+    client.read_dop2_leaf = AsyncMock(return_value=payload)
 
-    parsed = await client.dop2_get_parsed("0001", 2, 105)
+    parsed = await client.get_parsed_dop2_leaf("0001", 2, 105)
     assert isinstance(parsed, SFValue)
     assert parsed.sf_id == 100
     assert parsed.current_value == 10

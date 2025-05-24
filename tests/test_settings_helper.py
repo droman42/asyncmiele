@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from asyncmiele import MieleClient
 from asyncmiele.dop2.models import SFValue
@@ -17,22 +17,30 @@ def client():
 @pytest.mark.asyncio
 async def test_get_setting(client):
     sf = SFValue(sf_id=100, current_value=10, minimum=0, maximum=20, default=5)
-    client.dop2_get_parsed = AsyncMock(return_value=sf)
-
-    result = await client.get_setting("0001", 100)
-    assert result is sf
+    
+    # Mock the get_parsed_dop2_leaf method that actually exists
+    with patch.object(client, 'get_parsed_dop2_leaf', return_value=sf) as mock_get_parsed:
+        result = await client.get_setting("0001", 100)
+        
+        assert result is sf
+        # Verify the correct leaf was accessed for SF_VALUE
+        mock_get_parsed.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_set_setting_validation(client):
     sf = SFValue(sf_id=100, current_value=10, minimum=0, maximum=20, default=5)
-    client.dop2_get_parsed = AsyncMock(return_value=sf)
-    client.dop2_write_leaf = AsyncMock(return_value=None)
-
-    # invalid
-    with pytest.raises(ValueError):
-        await client.set_setting("0001", 100, 30)
-
-    # valid
-    await client.set_setting("0001", 100, 15)
-    client.dop2_write_leaf.assert_awaited() 
+    
+    # Mock both the get and write methods
+    with patch.object(client, 'get_parsed_dop2_leaf', return_value=sf) as mock_get_parsed, \
+         patch.object(client, 'write_dop2_leaf') as mock_write_leaf:
+        
+        # Test invalid value (outside range)
+        with pytest.raises(ValueError):
+            await client.set_setting("0001", 100, 30)
+        
+        # Test valid value (within range)
+        await client.set_setting("0001", 100, 15)
+        
+        # Verify the write was called for the valid case
+        mock_write_leaf.assert_called_once() 
