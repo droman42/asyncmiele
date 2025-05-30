@@ -101,9 +101,9 @@ def parse_leaf(unit: int, attribute: int, payload: bytes) -> Union[DeviceCombine
 # Parser functions for specific leaf types
 # ---------------------------------------------------------------------------
 
-@register_parser(2, 256, DeviceCombinedState)
+@register_parser(2, 1586, DeviceCombinedState)
 def _parse_device_combined_state(payload: bytes) -> DeviceCombinedState:
-    """Parse DeviceCombinedState from leaf 2/256."""
+    """Parse DeviceCombinedState from leaf 2/1586 (corrected from 2/256)."""
     if len(payload) < 6:
         raise ValueError("Payload too short for DeviceCombinedState")
     
@@ -112,6 +112,80 @@ def _parse_device_combined_state(payload: bytes) -> DeviceCombinedState:
     p_state = read_u16(payload, 4)
     
     return DeviceCombinedState(a_state, o_state, p_state)
+
+
+# Keep the old parser for backwards compatibility, but log a warning
+@register_parser(2, 256, DeviceCombinedState)
+def _parse_device_combined_state_legacy(payload: bytes) -> DeviceCombinedState:
+    """Parse DeviceCombinedState from legacy leaf 2/256 (deprecated)."""
+    logger.warning("Using deprecated leaf 2/256 for DeviceCombinedState. Modern devices use 2/1586.")
+    return _parse_device_combined_state(payload)
+
+
+@register_parser(2, 1585, dict)
+def _parse_device_context(payload: bytes) -> dict:
+    """Parse DeviceContext from leaf 2/1585."""
+    # This is a complex structure that may contain nested data
+    # For now, return a basic parsing attempt
+    try:
+        # Try JSON parsing first (newer devices)
+        import json
+        return json.loads(payload.decode('utf-8'))
+    except:
+        # Fall back to raw payload for binary format
+        return {"raw_data": payload.hex()}
+
+
+@register_parser(2, 1577, dict)
+def _parse_ps_select(payload: bytes) -> dict:
+    """Parse Program Selection from leaf 2/1577."""
+    if len(payload) < 8:
+        return {"raw_data": payload.hex()}
+    
+    program_id = read_u32(payload, 0)
+    selection_param = read_u32(payload, 4)
+    
+    return {
+        "program_id": program_id,
+        "selection_parameter": selection_param
+    }
+
+
+@register_parser(2, 1583, dict)
+def _parse_user_request(payload: bytes) -> dict:
+    """Parse User Request from leaf 2/1583."""
+    if len(payload) < 12:
+        return {"raw_data": payload.hex()}
+    
+    user_request_id = read_u32(payload, 0)
+    parameter0 = read_u32(payload, 4)
+    parameter1 = read_u32(payload, 8)
+    
+    return {
+        "user_request_id": user_request_id,
+        "parameter0": parameter0,
+        "parameter1": parameter1
+    }
+
+
+@register_parser(2, 131, dict)
+def _parse_notification_show(payload: bytes) -> dict:
+    """Parse Notification Show from leaf 2/131."""
+    # This structure varies significantly, return basic parsing
+    return {"raw_data": payload.hex()}
+
+
+@register_parser(1, 17, dict)
+def _parse_software_ids(payload: bytes) -> dict:
+    """Parse Software IDs from leaf 1/17."""
+    if len(payload) < 4:
+        return {"raw_data": payload.hex()}
+    
+    num_valid_ids = read_u32(payload, 0)
+    return {
+        "number_valid_software_ids": num_valid_ids,
+        "raw_data": payload.hex()
+    }
 
 
 @register_parser(2, 105, SFValue)

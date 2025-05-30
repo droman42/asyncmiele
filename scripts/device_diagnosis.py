@@ -110,7 +110,7 @@ async def test_dop2_leafs(client: MieleClient, device_id: str, specific_leafs=No
         try:
             print(f"Testing leaf {unit}/{attribute}...")
             # Create a task with a timeout
-            task = asyncio.create_task(client.dop2_read_leaf(device_id, unit, attribute))
+            task = asyncio.create_task(client.read_dop2_leaf(device_id, unit, attribute))
             
             try:
                 # Wait for the task with a timeout
@@ -167,17 +167,33 @@ async def run_diagnosis(client, device_id, args):
         results["state"] = None
         results["state_error"] = str(e)
     
-    # Try to wake up device if requested
+    # Detect capabilities first
+    try:
+        capabilities = await client.detect_capabilities(device_id)
+        results["capabilities"] = {cap.name: cap in capabilities for cap in DeviceCapability if cap != DeviceCapability.NONE}
+        print(f"Detected capabilities: {[cap.name for cap in DeviceCapability if cap in capabilities and cap != DeviceCapability.NONE]}")
+    except Exception as e:
+        results["capabilities_error"] = str(e)
+        capabilities = DeviceCapability.NONE
+    
+    # Try to wake up device if requested and supported
     if not args.no_wake:
-        try:
-            await client.wake_up(device_id)
-            results["wake_up"] = "success"
-            
-            # Wait a bit for the device to wake up
-            await asyncio.sleep(args.delay)
-        except Exception as e:
-            results["wake_up"] = "error"
-            results["wake_up_error"] = str(e)
+        if DeviceCapability.WAKE_UP in capabilities:
+            try:
+                print("\nAttempting to wake up device (capability detected)...")
+                await client.wake_up(device_id)
+                results["wake_up"] = "success"
+                print("Wake up command successful")
+                
+                # Wait a bit for the device to wake up
+                await asyncio.sleep(args.delay)
+            except Exception as e:
+                print(f"ERROR waking up device: {e}")
+                results["wake_up"] = "error"
+                results["wake_up_error"] = str(e)
+        else:
+            print("\nSkipping wake-up: Device does not support WAKE_UP capability")
+            results["wake_up"] = "skipped_unsupported"
     
     # Test DOP2 leaves
     if args.brief:
@@ -199,13 +215,6 @@ async def run_diagnosis(client, device_id, args):
         )
     
     results["dop2_leaves"] = dop2_results
-    
-    # Detect capabilities
-    try:
-        capabilities = await client.detect_capabilities(device_id)
-        results["capabilities"] = {cap.name: cap in capabilities for cap in DeviceCapability if cap != DeviceCapability.NONE}
-    except Exception as e:
-        results["capabilities_error"] = str(e)
     
     return results
 

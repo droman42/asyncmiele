@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Factory Reset Script for Miele Devices.
+Factory Reset Script for Miele Devices - DOP2 Protocol Implementation.
 
 This script provides functionality to perform a factory reset on a Miele device
-and optionally help with recovery after the reset.
+using the DOP2 protocol with universal XKM (eXtended Key Management) requests.
+It also provides recovery assistance after the reset.
+
+IMPORTANT: This script uses DOP2 protocol with XKM FactorySettings commands
+instead of REST API endpoints. The XKM approach is universal and should work
+across all Miele device types that support factory reset.
 """
 
 import asyncio
@@ -28,7 +33,7 @@ async def factory_reset_device(
     recovery_timeout: float = 120.0,
     confirm: bool = True
 ) -> bool:
-    """Perform a factory reset on a device.
+    """Perform a factory reset on a device using DOP2 XKM protocol.
     
     Args:
         profile: Device profile with connection information
@@ -45,8 +50,10 @@ async def factory_reset_device(
     # User confirmation
     if confirm:
         print(f"\n⚠️  WARNING: You are about to factory reset device {device_id} at {host} ⚠️")
+        print("This operation uses DOP2 protocol with XKM FactorySettings command.")
         print("This will erase all configuration and return the device to factory settings.")
         print("The device will need to be reconfigured after the reset.")
+        print("\nMethod: DOP2 XKM FactorySettings with device-specific fallbacks")
         confirmation = input("Are you sure you want to proceed? (y/N): ")
         if confirmation.lower() not in ["y", "yes"]:
             print("Reset canceled.")
@@ -73,7 +80,7 @@ async def factory_reset_device(
             # Get client from manager
             client = await connection_manager.get_client(device_id, profile)
             
-            # Try to get device info to cache MAC
+            # Try to get device info to cache MAC and detect device type
             try:
                 from asyncmiele.utils.discovery import get_device_info
                 device_info = await get_device_info(host)
@@ -81,18 +88,44 @@ async def factory_reset_device(
                     mac_address = device_info["mac"]
                     resetter.register_device_mac(device_id, mac_address)
                     print(f"Identified device MAC address: {mac_address}")
+                    
+                # Try to identify device type for better logging
+                try:
+                    device = await client.get_device(device_id)
+                    if device and device.ident:
+                        device_type_id = device.ident.type_id
+                        device_type_name = device.ident.device_name or "Unknown"
+                        device_type_str = device.ident.device_type.lower() if device.ident.device_type else ""
+                        print(f"Device type: {device_type_name} (ID: {device_type_id})")
+                        
+                        # Check if it's an induction hob
+                        if any(keyword in device_type_str for keyword in ['hob', 'induction', 'cooktop', 'kochfeld']):
+                            print("⚠️  This is an induction hob/cooktop.")
+                            print("⚠️  Induction hobs typically have limited remote control capabilities.")
+                            print("⚠️  Factory reset may require manual intervention via the control panel.")
+                            
+                except Exception:
+                    print("Could not determine device type")
+                    
             except Exception as e:
                 print(f"Could not determine device MAC address: {e}")
                 
-            # Perform the reset
-            print(f"Initiating factory reset for device {device_id}...")
+            # Perform the reset using DOP2 XKM protocol
+            print(f"Initiating factory reset for device {device_id} using DOP2 XKM protocol...")
+            print("Attempting XKM FactorySettings command with fallback to device-specific SF values...")
             reset_initiated = await resetter.initiate_reset(client, device_id)
             
             if not reset_initiated:
-                print("❌ Factory reset failed to initiate. Device may not support remote reset.")
+                print("❌ Factory reset failed to initiate.")
+                print("This could mean:")
+                print("  - Device does not support remote factory reset")
+                print("  - Device is not in the correct state for reset")
+                print("  - Network communication failed")
+                print("  - DOP2 protocol access was denied")
                 return False
                 
-            print("✅ Factory reset initiated successfully.")
+            print("✅ Factory reset initiated successfully using DOP2 protocol.")
+            print("The device should now be entering factory reset mode...")
             
             # Wait for device to enter reset/setup mode if requested
             if wait_for_recovery:
@@ -115,22 +148,55 @@ async def factory_reset_device(
                         print("\nTo reconfigure the device, use the MieleSetupClient:")
                         print("  python -m asyncmiele.scripts.configure_device_wifi --help")
                     else:
-                        print("No devices in setup mode found. The device might not be broadcasting.")
+                        print("No devices in setup mode found. The device might not be broadcasting yet.")
+                        print("Try discovering devices manually after a few minutes.")
                 else:
                     print("⚠️ Device did not enter setup mode within the timeout period.")
-                    print("It may still be resetting or might require manual intervention.")
+                    print("The reset command was sent successfully, but device status is unclear.")
+                    print("Possible reasons:")
+                    print("  - Device is still processing the reset (may take several minutes)")
+                    print("  - Device requires manual confirmation (check device display)")
+                    print("  - Device entered a different mode than expected")
+                    print("  - Network connectivity changed during reset")
                     
             return reset_initiated
                 
         except DeviceResetError as e:
             print(f"❌ Error during reset operation: {e}")
+            print("\nTroubleshooting tips:")
+            print("  - Ensure device is powered on and connected to network")
+            print("  - Check if device supports remote factory reset")
+            print("  - Verify group_id and group_key are correct")
+            print("  - Try again after ensuring device is in normal operating mode")
+            
+            # Check if the device is an induction hob for specific guidance
+            try:
+                device = await connection_manager.get_client(device_id, profile).get_device(device_id)
+                if device and device.ident and device.ident.device_type:
+                    device_type_str = device.ident.device_type.lower()
+                    if any(keyword in device_type_str for keyword in ['hob', 'induction', 'cooktop', 'kochfeld']):
+                        print("\n🔧 Induction Hob Manual Reset Instructions:")
+                        print("  1. Use the control panel on the device")
+                        print("  2. Access Settings → Configuration → Network")
+                        print("  3. Look for 'Reset' or 'Factory Settings' option")
+                        print("  4. Follow the on-screen prompts")
+                        print("  5. Consult your device manual for model-specific steps")
+            except Exception:
+                pass  # Ignore errors in providing additional guidance
+                
             return False
         except ConnectionLostError as e:
-            print(f"❌ Connection lost: {e}")
+            print(f"🔄 Connection lost: {e}")
             print("This is expected during a reset as the device disconnects.")
+            print("The factory reset was likely successful.")
             return True  # Connection loss during reset is actually expected
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
+            print("\nThis might indicate:")
+            print("  - Network connectivity issues")
+            print("  - Invalid device credentials")
+            print("  - Device firmware limitations")
+            print("  - DOP2 protocol compatibility issues")
             return False
 
 
@@ -209,7 +275,19 @@ async def discover_and_list() -> None:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Factory Reset Tool for Miele Devices"
+        description="Factory Reset Tool for Miele Devices (DOP2 XKM Protocol)",
+        epilog="""
+This tool uses the DOP2 protocol with XKM (eXtended Key Management) commands
+to perform factory resets. It attempts multiple reset methods:
+
+1. Universal XKM FactorySettings command (works on all device types)
+2. Device-specific SF (Setting Function) values as fallback
+3. Multiple DOP2 unit/attribute combinations for compatibility
+
+The XKM approach is recommended as it's device-type agnostic and should work
+across all Miele appliances that support factory reset functionality.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         "--config", type=str,
@@ -237,7 +315,7 @@ def main():
     )
     parser.add_argument(
         "--timeout", type=float, default=120.0,
-        help="Timeout in seconds to wait for device to enter setup mode"
+        help="Timeout in seconds to wait for device to enter setup mode (default: 120)"
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -249,7 +327,7 @@ def main():
     )
     parser.add_argument(
         "--debug", action="store_true",
-        help="Enable debug logging"
+        help="Enable debug logging (shows DOP2 protocol details)"
     )
     
     args = parser.parse_args()
@@ -292,6 +370,14 @@ def main():
         print("Error: Must provide either a config file or host, group-id, and group-key.")
         parser.print_help()
         return 1
+    
+    # Show protocol information
+    if args.debug:
+        print("\n=== DOP2 XKM Factory Reset Protocol ===")
+        print("Method: XKM FactorySettings command via DOP2")
+        print("Fallbacks: Device-specific SF values")
+        print("Protocol: Encrypted DOP2 with AES padding")
+        print("=========================================\n")
     
     # Perform the reset
     success = asyncio.run(factory_reset_device(

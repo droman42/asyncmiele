@@ -158,16 +158,25 @@ asyncio.run(test_connection())
 
 ## Factory Reset
 
-This section explains how to use the factory reset functionality in the asyncmiele library to reset Miele devices to their factory default settings.
+This section explains how to use the factory reset functionality in the asyncmiele library to reset Miele devices to their factory default settings using the DOP2 protocol.
 
 ### Overview
 
-The factory reset functionality allows you to:
+The factory reset functionality uses the **DOP2 protocol with XKM (eXtended Key Management) commands** to perform device resets. This approach is universal and works across all Miele device types that support factory reset functionality.
 
-1. Reset a Miele device to factory default settings
-2. Wait for the device to enter setup mode after reset
-3. Discover and list devices in setup mode
-4. Provide instructions for reconfiguring the device after reset
+The reset process attempts multiple methods:
+
+1. **Universal XKM FactorySettings command** - Works on all device types (primary method)
+2. **Device-specific SF (Setting Function) values** - Type-specific fallback method
+3. **Multiple DOP2 unit/attribute combinations** - For maximum compatibility
+
+### Key Features
+
+- **Universal compatibility**: XKM commands work across all device types
+- **Automatic fallback**: Falls back to device-specific methods if needed
+- **DOP2 protocol**: Uses proper encrypted communication protocol
+- **Device type detection**: Automatically detects device type for optimal reset method
+- **Recovery assistance**: Helps discover and reconfigure devices after reset
 
 ### When to Use Factory Reset
 
@@ -186,10 +195,11 @@ To perform a factory reset, you'll need:
 1. The IP address or hostname of the device
 2. Valid security credentials (group_id and group_key)
 3. Network connectivity to the device
+4. Device must be powered on and in normal operating mode
 
 ### Using the Factory Reset Script
 
-The library includes a dedicated script for performing factory resets:
+The library includes a dedicated script for performing factory resets using the DOP2 XKM protocol:
 
 ```bash
 # Basic usage with config file
@@ -210,6 +220,9 @@ The library includes a dedicated script for performing factory resets:
 # Change the timeout for waiting for setup mode
 ./scripts/device_factory_reset.py --config examples/connection_config.json --timeout 180.0
 
+# Enable debug logging to see DOP2 protocol details
+./scripts/device_factory_reset.py --config examples/connection_config.json --debug
+
 # Just discover and list devices on the network
 ./scripts/device_factory_reset.py --discover
 ```
@@ -227,7 +240,7 @@ The library includes a dedicated script for performing factory resets:
 | `--timeout` | Timeout in seconds to wait for device to enter setup mode (default: 120) |
 | `--force` | Skip confirmation prompt |
 | `--discover` | Just discover and list Miele devices on the network |
-| `--debug` | Enable debug logging |
+| `--debug` | Enable debug logging (shows DOP2 protocol details) |
 
 ### Configuration File Format
 
@@ -248,15 +261,40 @@ The configuration file should be in JSON format and contain device information:
 
 ### Reset Process
 
-The reset process follows these steps:
+The DOP2 XKM reset process follows these steps:
 
 1. **Confirmation**: Unless `--force` is used, the script will ask for confirmation before proceeding
 2. **Connection**: The script establishes a connection to the device
-3. **MAC Address Caching**: The script attempts to cache the device's MAC address to aid in discovery after reset
-4. **Reset Command**: The script sends the factory reset command to the device
-5. **Waiting for Setup Mode**: Unless `--no-wait` is used, the script waits for the device to enter setup mode
-6. **Discovery**: After reset, the script performs a discovery to find devices in setup mode
-7. **Reconfiguration Instructions**: The script provides instructions for reconfiguring the device
+3. **Device Detection**: The script detects device type and caches MAC address for recovery
+4. **XKM Reset Command**: The script sends XKM FactorySettings command via DOP2 protocol
+5. **Fallback Methods**: If XKM fails, tries device-specific SF values
+6. **Multiple Endpoints**: Attempts various DOP2 unit/attribute combinations
+7. **Waiting for Setup Mode**: Unless `--no-wait` is used, the script waits for the device to enter setup mode
+8. **Discovery**: After reset, the script performs a discovery to find devices in setup mode
+9. **Reconfiguration Instructions**: The script provides instructions for reconfiguring the device
+
+### Technical Details
+
+#### XKM (eXtended Key Management) Commands
+
+The primary reset method uses XKM FactorySettings command (value: 2) sent via DOP2 protocol:
+
+- **Unit/Attribute combinations tried**: (1,1), (1,2), (1,100), (2,1)
+- **Payload format**: 16-bit XKM request type, padded for AES encryption
+- **Protocol**: Encrypted DOP2 with HMAC signature
+
+#### Device-Specific Fallbacks
+
+If XKM commands fail, the script attempts device-specific SF values:
+
+| Device Type | SF Value | Description |
+|-------------|----------|-------------|
+| Washing Machines | 12196 | Washer_FactoryReset |
+| Tumble Dryers | 16001 | Dryer_FactoryDefault |
+| Dishwashers | XKM only | No specific SF value |
+| Ovens/Ranges | XKM only | No specific SF value |
+| Induction Hobs/Cooktops | XKM only | Limited connectivity - often no remote reset |
+| Other devices | XKM only | Universal approach |
 
 ### After Reset
 
@@ -274,15 +312,58 @@ python -m asyncmiele.scripts.configure_device_wifi --help
 
 ### Troubleshooting
 
-If the factory reset fails or the device doesn't enter setup mode:
+#### Reset Command Fails
 
-1. **Check Physical Access**: Some devices may require physical button presses to confirm the reset
-2. **Check Documentation**: Refer to the device manual for model-specific reset procedures
-3. **Try Manual Reset**: Most Miele devices have a physical reset button or procedure
-4. **Check Network**: Ensure you have network connectivity to the device before reset
-5. **Update Credentials**: Ensure you're using the correct group_id and group_key
-6. **Increase Timeout**: Try increasing the timeout with `--timeout` for slower devices
+If the factory reset command fails:
+
+1. **Check Device State**: Ensure device is powered on and in normal operating mode
+2. **Verify Credentials**: Confirm group_id and group_key are correct
+3. **Check Network**: Ensure network connectivity to the device
+4. **Device Support**: Verify device supports remote factory reset
+5. **Manual Reset**: Try physical reset button if available
+
+#### Special Considerations for Induction Hobs
+
+Induction hobs and cooktops typically have very limited connectivity features compared to other Miele appliances:
+
+1. **Limited Remote Control**: Most induction hobs don't support remote factory reset
+2. **Manual Reset Required**: Factory reset typically requires using the physical control panel
+3. **Network Features**: May only support basic network connectivity for monitoring
+4. **Manual Reset Procedure**:
+   - Access the device's settings menu on the control panel
+   - Navigate to "Settings", "Configuration", or "Network" options
+   - Look for "Reset", "Factory Settings", or "Network Reset"
+   - Follow the on-screen instructions
+   - Some models may require holding specific button combinations
+   - Consult your device manual for model-specific instructions
+
+#### Device Doesn't Enter Setup Mode
+
+If the device doesn't enter setup mode after reset:
+
+1. **Wait Longer**: Some devices take several minutes to complete reset
+2. **Check Display**: Look for reset confirmation prompts on device display
+3. **Manual Confirmation**: Some devices require manual confirmation
+4. **Power Cycle**: Try turning device off and on again
+5. **Physical Reset**: Use device's physical reset procedure
+
+#### Discovery Issues
+
+If you can't find the device after reset:
+
+1. **Network Scanning**: Try manual network scanning for new access points
+2. **MAC Address**: Look for the cached MAC address in WiFi networks
+3. **Different Network**: Device may create its own WiFi network
+4. **Timing**: Wait a few minutes and try discovery again
+5. **Physical Proximity**: Move closer to the device
 
 ### Caution
 
-Factory reset is an irreversible operation. All device settings will be lost and will need to be reconfigured. Always attempt less drastic troubleshooting methods before performing a factory reset. 
+**Factory reset is an irreversible operation.** All device settings will be lost and will need to be reconfigured. Always attempt less drastic troubleshooting methods before performing a factory reset.
+
+**Important Notes:**
+- Some devices may require manual confirmation via display interface
+- Reset process may take several minutes to complete
+- Device will disconnect from current WiFi network during reset
+- All custom settings, programs, and network configurations will be lost
+- Device must be reconfigured before it can be used again 

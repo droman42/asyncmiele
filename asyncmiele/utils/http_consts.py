@@ -1,14 +1,17 @@
 """Shared HTTP header constants used across asyncmiele.
 
-Keeping the strings in **one** place guarantees future version bumps (e.g.
-API version update) only need a single change.
+These values are aligned with MieleRESTServer reference implementation.
 """
 
-ACCEPT_HEADER: str = "application/vnd.miele.v1+json"
+# Accept header value - matches MieleRESTServer exactly
+ACCEPT_HEADER = "application/vnd.miele.v1+json"
 """Default *Accept:* value used by all requests."""
 
-USER_AGENT: str = "Miele@mobile 2.3.3 iOS"
-"""User-agent string copied from the MieleRESTServer reference implementation."""
+# User-Agent header - matches MieleRESTServer exactly  
+USER_AGENT = "Miele@mobile 2.3.3 iOS"
+"""User-Agent string that matches MieleRESTServer implementation."""
 
-CONTENT_TYPE_JSON: str = "application / vnd.miele.v1 + json; charset = utf - 8"
+# Content-Type header for PUT requests - matches MieleRESTServer exactly
+# Note: The spaces around '/' are intentional and match the reference implementation
+CONTENT_TYPE_JSON = "application / vnd.miele.v1 + json; charset = utf - 8"
 """Content-Type for encrypted JSON bodies (PUT) - matches MieleRESTServer exactly.""" 

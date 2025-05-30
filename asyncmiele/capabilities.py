@@ -1,16 +1,19 @@
 """
-Device capability detection and management.
+Device capability detection and management for Miele appliances.
 
-This module provides functionality to detect and manage Miele device capabilities,
-allowing for adaptive behavior based on the actual features supported by each device.
-Enhanced for Set-based capability operations and DeviceProfile integration.
+This module provides functionality to detect what capabilities a device supports,
+track capability test results, and provide capability-based feature gating.
 """
 
-from enum import Flag, auto
-from typing import Dict, Set, List, Optional, Any, Tuple
 import logging
+from enum import Flag, auto
+from typing import Dict, Set, Tuple, TYPE_CHECKING
+from functools import wraps
 
-from asyncmiele.enums import DeviceType
+from asyncmiele.enums import DeviceTypeMiele as DeviceType
+
+if TYPE_CHECKING:
+    from asyncmiele.api.client import MieleClient
 
 logger = logging.getLogger(__name__)
 

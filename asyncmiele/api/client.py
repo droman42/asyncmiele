@@ -725,7 +725,17 @@ class MieleClient:
         """
         # Get device to determine type
         device = await self.get_device(device_id)
-        device_type = device.ident.type_id if device.ident else DeviceType.NoUse
+        # Use device_type string or fall back to tech_type, then map to DeviceType enum
+        device_type_str = device.ident.device_type or device.ident.tech_type or ""
+        
+        # Try to map the device type string to DeviceType enum
+        device_type = DeviceType.NoUse  # Default fallback
+        if device_type_str:
+            # Try to find matching DeviceType by name
+            for dt in DeviceType:
+                if dt.name.lower() in device_type_str.lower() or device_type_str.lower() in dt.name.lower():
+                    device_type = dt
+                    break
         
         # Run capability tests
         detected = DeviceCapability.NONE
@@ -778,7 +788,17 @@ class MieleClient:
         # Get device to determine type
         try:
             device = await self.get_device(device_id)
-            device_type = device.ident.type_id if device.ident else DeviceType.NoUse
+            # Use device_type string or fall back to tech_type, then map to DeviceType enum
+            device_type_str = device.ident.device_type or device.ident.tech_type or ""
+            
+            # Try to map the device type string to DeviceType enum
+            device_type = DeviceType.NoUse  # Default fallback
+            if device_type_str:
+                # Try to find matching DeviceType by name
+                for dt in DeviceType:
+                    if dt.name.lower() in device_type_str.lower() or device_type_str.lower() in dt.name.lower():
+                        device_type = dt
+                        break
         except Exception:
             device_type = DeviceType.NoUse
         
@@ -1046,7 +1066,7 @@ class MieleClient:
         Returns:
             DOP2Client instance
         """
-        return DOP2Client(self)
+        return self._dop2
 
     # Note: The get_dop2_client() method is kept for backward compatibility.
     # All DOP2 operations are now handled directly by MieleClient HTTP methods.

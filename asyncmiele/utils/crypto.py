@@ -117,13 +117,13 @@ def build_auth_header(
     else:
         body_bytes = body
 
-    # Construct the canonical payload string identical to MieleRESTServer
-    # MieleRESTServer uses resourcePath without leading slash, then {host}/{resourcePath}
-    # So we need to strip leading slash from resource for canonical string
-    resource_for_canonical = resource.lstrip('/')
+    # Construct the canonical payload string exactly matching MieleRESTServer
+    # MieleRESTServer: payload=f"{httpMethod}\n{host}/{resourcePath}\n{contentTypeHeader}\n{acceptHeader}\n{date}\n";
+    # resourcePath is used without leading slash, so we need to strip it
+    resource_path = resource.lstrip('/')
     canonical = (
-        f"{method}\n{host}/{resource_for_canonical}\n{content_type_header}\n{accept_header}\n{date}\n".encode(
-            "ASCII"
+        f"{method}\n{host}/{resource_path}\n{content_type_header}\n{accept_header}\n{date}\n".encode(
+            "utf-8"
         )
         + body_bytes
     )
@@ -133,15 +133,58 @@ def build_auth_header(
     # The IV is the first 16 *bytes* of the hash, not the first 16 hex chars.
     iv_bytes = bytes.fromhex(digest_hex)[:16]
 
-    auth_header = f"MieleH256 {group_id.hex()}:{digest_hex}"
+    # FIXED: Use uppercase GroupID to match MieleRESTServer behavior
+    # MieleRESTServer uses: self.provisioningInfo.groupid (which is .upper())
+    auth_header = f"MieleH256 {group_id.hex().upper()}:{digest_hex}"
     return auth_header, iv_bytes
 
 def pad_payload(payload: bytes, blocksize: int = 16) -> bytes:
-    """Pad *payload* with ASCII space (0x20) to a multiple of *blocksize*."""
+    """Pad payload with ASCII space (0x20) to match MieleRESTServer behavior exactly.
+    
+    MieleRESTServer padding logic:
+    - For JSON strings: payload[0:-1] + " "* (64-len(payload)) + "}"
+    - For binary: payload.ljust(len(payload) + padding, b'\x20')
+    
+    Args:
+        payload: The payload to pad
+        blocksize: Block size for padding (default 16 for AES)
+        
+    Returns:
+        Padded payload
+    """
+    if len(payload) == 0:
+        return payload
+        
+    # Check if this looks like a JSON payload (common case)
+    try:
+        payload_str = payload.decode('utf-8')
+        if payload_str.strip().startswith('{') and payload_str.strip().endswith('}'):
+            # FIXED: Use exact MieleRESTServer JSON padding logic
+            # MieleRESTServer: payload=payload[0:-1] + " "* (64-len(payload)) + "}";
+            if payload_str[-1] != "}":
+                raise Exception("Plaintext must be terminated with literal '}'")
+            
+            if len(payload_str) >= 64:
+                # For larger payloads, no special padding needed
+                return payload
+            else:
+                # For smaller JSON, pad to 64 bytes by inserting spaces before }
+                spaces_needed = 64 - len(payload_str)
+                if spaces_needed > 0:
+                    padded_str = payload_str[0:-1] + " " * spaces_needed + "}"
+                    return padded_str.encode('utf-8')
+                else:
+                    return payload
+    except UnicodeDecodeError:
+        # Not UTF-8, treat as binary
+        pass
+    
+    # FIXED: Use exact MieleRESTServer binary padding logic
+    # MieleRESTServer: payload.ljust(len(payload) + padding, b'\x20')
     if len(payload) % blocksize == 0:
         return payload
     padding = blocksize - (len(payload) % blocksize)
-    return payload + (b"\x20" * padding)
+    return payload.ljust(len(payload) + padding, b'\x20')
 
 
 def encrypt_payload(plaintext: bytes, key: bytes, iv: bytes) -> bytes:

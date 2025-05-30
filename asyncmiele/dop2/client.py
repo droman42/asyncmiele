@@ -34,8 +34,8 @@ class DOP2Client:
     LEAF_SYSTEM_STATUS = (1, 3)
     LEAF_SYSTEM_CONFIG = (1, 4)
 
-    # Core DOP2 leaves (Unit 2)
-    LEAF_COMBINED_STATE = (2, 256)
+    # Core DOP2 leaves (Unit 2) - Updated to match MieleRESTServer
+    LEAF_COMBINED_STATE = (2, 1586)  # Fixed: was 2/256, now matches MieleRESTServer
     LEAF_SF_VALUE = (2, 105)
     LEAF_PROGRAM_LIST = (2, 1584)
     LEAF_HOURS_OF_OPERATION = (2, 119)
@@ -43,6 +43,15 @@ class DOP2Client:
     LEAF_CONSUMPTION_STATS = (2, 6195)
     LEAF_DEVICE_STATE = (2, 286)
     LEAF_DEVICE_IDENT = (2, 293)
+    
+    # Additional leaves from MieleRESTServer reference
+    LEAF_DEVICE_CONTEXT = (2, 1585)
+    LEAF_PS_SELECT = (2, 1577)
+    LEAF_PS_CONTEXT = (2, 1574)
+    LEAF_USER_REQUEST = (2, 1583)
+    LEAF_NOTIFICATION_SHOW = (2, 131)
+    LEAF_SF_LIST = (2, 1589)
+    LEAF_DATE_TIME = (2, 293)
 
     # Semi-pro leaves (Unit 3)
     LEAF_SEMIPRO_CONFIG = (3, 1000)
@@ -51,6 +60,16 @@ class DOP2Client:
     LEAF_LEGACY_PROGRAM_LIST = (14, 1570)
     LEAF_LEGACY_OPTION_LIST = (14, 1571)
     LEAF_LEGACY_STRING_TABLE = (14, 2570)
+    
+    # System information leaves (Unit 1) - Additional from MieleRESTServer
+    LEAF_SOFTWARE_IDS = (1, 17)
+    
+    # File transfer leaves (Unit 15) - From MieleRESTServer
+    LEAF_FT_LAST_UPDATE_INFO = (15, 199)
+    LEAF_FT_UPDATE_CONTROL = (15, 170)
+    LEAF_FT_FILE_INFO = (15, 1588)
+    LEAF_FT_FILE_WRITE = (15, 1590)
+    LEAF_FT_PUBLIC_KEY = (15, 287)
     
     def __init__(self):
         """Initialize the DOP2Client as a pure protocol handler."""
@@ -141,9 +160,13 @@ class DOP2Client:
             Dictionary mapping leaf names to (unit, attribute) tuples
         """
         return {
+            # System leaves (Unit 1)
             'SYSTEM_INFO': self.LEAF_SYSTEM_INFO,
             'SYSTEM_STATUS': self.LEAF_SYSTEM_STATUS,
             'SYSTEM_CONFIG': self.LEAF_SYSTEM_CONFIG,
+            'SOFTWARE_IDS': self.LEAF_SOFTWARE_IDS,
+            
+            # Core DOP2 leaves (Unit 2)
             'COMBINED_STATE': self.LEAF_COMBINED_STATE,
             'SF_VALUE': self.LEAF_SF_VALUE,
             'PROGRAM_LIST': self.LEAF_PROGRAM_LIST,
@@ -152,10 +175,28 @@ class DOP2Client:
             'CONSUMPTION_STATS': self.LEAF_CONSUMPTION_STATS,
             'DEVICE_STATE': self.LEAF_DEVICE_STATE,
             'DEVICE_IDENT': self.LEAF_DEVICE_IDENT,
+            'DEVICE_CONTEXT': self.LEAF_DEVICE_CONTEXT,
+            'PS_SELECT': self.LEAF_PS_SELECT,
+            'PS_CONTEXT': self.LEAF_PS_CONTEXT,
+            'USER_REQUEST': self.LEAF_USER_REQUEST,
+            'NOTIFICATION_SHOW': self.LEAF_NOTIFICATION_SHOW,
+            'SF_LIST': self.LEAF_SF_LIST,
+            'DATE_TIME': self.LEAF_DATE_TIME,
+            
+            # Semi-pro leaves (Unit 3)
             'SEMIPRO_CONFIG': self.LEAF_SEMIPRO_CONFIG,
+            
+            # Legacy leaves (Unit 14)
             'LEGACY_PROGRAM_LIST': self.LEAF_LEGACY_PROGRAM_LIST,
             'LEGACY_OPTION_LIST': self.LEAF_LEGACY_OPTION_LIST,
             'LEGACY_STRING_TABLE': self.LEAF_LEGACY_STRING_TABLE,
+            
+            # File transfer leaves (Unit 15)
+            'FT_LAST_UPDATE_INFO': self.LEAF_FT_LAST_UPDATE_INFO,
+            'FT_UPDATE_CONTROL': self.LEAF_FT_UPDATE_CONTROL,
+            'FT_FILE_INFO': self.LEAF_FT_FILE_INFO,
+            'FT_FILE_WRITE': self.LEAF_FT_FILE_WRITE,
+            'FT_PUBLIC_KEY': self.LEAF_FT_PUBLIC_KEY,
         }
 
     def create_explorer(self) -> DOP2Explorer:

@@ -7,7 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from asyncmiele.capabilities import DeviceCapability
-from asyncmiele.enums import DeviceType
+from asyncmiele.enums import DeviceTypeMiele
 from asyncmiele.models.credentials import MieleCredentials
 from asyncmiele.programs.catalog import ProgramCatalog
 
@@ -23,7 +23,7 @@ class DeviceProfile(BaseModel):
     
     # Core device information
     device_id: str = Field(..., description="Unique device identifier")
-    device_type: DeviceType = Field(DeviceType.NoUse, description="Type of device")
+    device_type: DeviceTypeMiele = Field(DeviceTypeMiele.NoUse, description="Type of device")
     friendly_name: Optional[str] = Field(None, description="User-friendly name")
     
     # Connection information (direct fields - no config wrapper)
