@@ -73,7 +73,7 @@ class StandbyStateError(Exception):
 
 # Phase 4.3 - Complete Device Compatibility Matrix (Research-Based)
 DEVICE_COMPATIBILITY_DETAILED = {
-    DeviceType.Oven: {
+    DeviceType.OVEN: {
         "ProcessAction": {
             1: {"name": "start", "requirements": "remote_enabled"},
             2: {"name": "stop", "requirements": "program_running"}
@@ -94,7 +94,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["Active", "NetworkIdle", "DeepSleep"],
         "standby_behavior": "Auto-sleep after idle period"
     },
-    DeviceType.WashingMachine: {
+    DeviceType.WASHING_MACHINE: {
         "ProcessAction": {
             1: {"name": "start", "requirements": "remote_start_mode"},
             2: {"name": "stop", "requirements": "program_running"},
@@ -118,7 +118,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["NetworkIdle", "DeepSleep"],
         "standby_behavior": "Deep sleep after 30 min timeout"
     },
-    DeviceType.TumbleDryer: {
+    DeviceType.DRYER: {
         "ProcessAction": {
             1: {"name": "start", "requirements": "remote_start_mode"},
             2: {"name": "stop", "requirements": "program_running"},
@@ -140,7 +140,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["NetworkIdle", "DeepSleep"],
         "standby_behavior": "Deep sleep after 30 min timeout"
     },
-    DeviceType.Dishwasher: {
+    DeviceType.DISHWASHER: {
         "ProcessAction": {
             1: {"name": "start", "requirements": "remote_start_mode"},
             2: {"name": "stop", "requirements": "program_running"}
@@ -161,7 +161,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["NetworkIdle", "DeepSleep"],
         "standby_behavior": "Network idle, deep sleep after timeout"
     },
-    DeviceType.CoffeeMaker: {
+    DeviceType.COFFEE_MAKER: {
         "ProcessAction": {
             1: {"name": "start_program", "requirements": "device_ready"},
             2: {"name": "stop_program", "requirements": "program_running"}
@@ -189,7 +189,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["Active", "NetworkIdle", "DeepSleep"],
         "standby_behavior": "Auto-sleep after 5 min timeout"
     },
-    DeviceType.Fridge: {
+    DeviceType.FRIDGE: {
         "ProcessAction": {
             4: {"name": "start_superfreezing", "requirements": "device_on"},
             5: {"name": "stop_superfreezing", "requirements": "superfreezing_active"},
@@ -208,7 +208,7 @@ DEVICE_COMPATIBILITY_DETAILED = {
         "power_states": ["Active"],
         "standby_behavior": "Always active - no standby modes"
     },
-    DeviceType.FridgeFreezer: {
+    DeviceType.FREEZER: {
         "ProcessAction": {
             4: {"name": "start_superfreezing", "requirements": "device_on"},
             5: {"name": "stop_superfreezing", "requirements": "superfreezing_active"},
@@ -226,6 +226,28 @@ DEVICE_COMPATIBILITY_DETAILED = {
         ],
         "power_states": ["Active"],
         "standby_behavior": "Always active - no standby modes"
+    },
+    DeviceType.HOOD: {
+        "ProcessAction": {
+            1: {"name": "start", "requirements": "remote_enabled"},
+            2: {"name": "stop", "requirements": "program_running"}
+        },
+        "DeviceAction": {
+            1: {"name": "power_on", "requirements": "mains_power"},
+            2: {"name": "wake_up", "requirements": "network_standby"}
+        },
+        "UserRequest": {
+            2: {"name": "mute_buzzer", "requirements": "signal_active"},
+            4: {"name": "enable_child_lock", "requirements": "device_on"},
+            5: {"name": "disable_child_lock", "requirements": "device_on"}
+        },
+        "limitations": [
+            "Manual operation primarily",
+            "Limited remote functionality",
+            "Safety restrictions for remote operation"
+        ],
+        "power_states": ["Active", "NetworkIdle", "DeepSleep"],
+        "standby_behavior": "Auto-sleep after idle period"
     }
 }
 

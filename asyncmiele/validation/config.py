@@ -1,13 +1,44 @@
 """Configuration validation system."""
 
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Any, Protocol
 from dataclasses import dataclass
 
 from asyncmiele.models.device_profile import DeviceProfile
-from asyncmiele.api.client import MieleClient
 from asyncmiele.capabilities import DeviceCapability
 from asyncmiele.exceptions.config import InvalidConfigurationError
+
+
+class ClientProtocol(Protocol):
+    """Protocol defining the interface we need from MieleClient."""
+    
+    async def get_device(self, device_id: str) -> Any:
+        """Get device by ID."""
+        ...
+    
+    async def wake_up(self, device_id: str) -> None:
+        """Wake up device."""
+        ...
+    
+    async def get_device_state(self, device_id: str) -> Any:
+        """Get device state."""
+        ...
+    
+    async def can_remote_start(self, device_id: str) -> bool:
+        """Check if device can remote start."""
+        ...
+    
+    async def get_program_catalog(self, device_id: str) -> Any:
+        """Get program catalog."""
+        ...
+    
+    async def __aenter__(self) -> "ClientProtocol":
+        """Async context manager entry."""
+        ...
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        ...
 
 
 @dataclass
@@ -26,7 +57,7 @@ class ConfigurationValidator:
     def __init__(self, timeout: float = 5.0):
         self.timeout = timeout
     
-    async def validate_profile(self, profile: DeviceProfile, client: MieleClient) -> ValidationResult:
+    async def validate_profile(self, profile: DeviceProfile, client: ClientProtocol) -> ValidationResult:
         """Validate complete device profile.
         
         Args:
@@ -65,7 +96,7 @@ class ConfigurationValidator:
             catalog_available=catalog_available
         )
     
-    async def validate_connectivity(self, profile: DeviceProfile, client: MieleClient) -> bool:
+    async def validate_connectivity(self, profile: DeviceProfile, client: ClientProtocol) -> bool:
         """Test device connectivity.
         
         Args:
@@ -82,7 +113,7 @@ class ConfigurationValidator:
         except Exception:
             return False
     
-    async def validate_capabilities(self, profile: DeviceProfile, client: MieleClient) -> List[str]:
+    async def validate_capabilities(self, profile: DeviceProfile, client: ClientProtocol) -> List[str]:
         """Validate device capabilities.
         
         Args:
@@ -118,7 +149,7 @@ class ConfigurationValidator:
         """
         return profile.program_catalog is not None and len(profile.program_catalog.get("programs", {})) > 0
     
-    async def _test_capability(self, client: MieleClient, device_id: str, capability: DeviceCapability) -> None:
+    async def _test_capability(self, client: ClientProtocol, device_id: str, capability: DeviceCapability) -> None:
         """Test a specific capability.
         
         Args:

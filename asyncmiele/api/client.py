@@ -1675,7 +1675,7 @@ class MieleClient:
         
         return DOP2Explorer(data_provider)
 
-    def get_standby_behavior(device_type: DeviceType) -> str:
+    def get_standby_behavior(self, device_type: DeviceType) -> str:
         """Get description of standby behavior for a device type.
         
         Args:
