@@ -397,4 +397,31 @@ def program_name(code: int) -> str | None:
 
 def icon_for(key: str) -> str | None:
     """Return mdi icon string for given key (e.g. 'Appliance.WASHING_MACHINE')."""
-    return ICON_MAP.get(key) 
+    return ICON_MAP.get(key)
+
+
+# Add new enums after the existing UserRequest enum for protocol consistency
+
+class ProcessAction(IntEnum):
+    """Process action enumeration for program control."""
+    NO_OPERATION = 0           # Default state
+    START_RESUME = 1           # Start or resume program
+    STOP = 2                   # Stop/cancel program
+    PAUSE = 3                  # Pause program (device dependent)
+    START_SUPERFREEZING = 4    # Start SuperFreeze (refrigeration)
+    STOP_SUPERFREEZING = 5     # Stop SuperFreeze (refrigeration)
+    START_SUPERCOOLING = 6     # Start SuperCool (refrigeration)
+    STOP_SUPERCOOLING = 7      # Stop SuperCool (refrigeration)
+    DISABLE_GAS = 8            # Disable gas supply (gas appliances)
+    ENABLE_GAS = 9             # Enable gas supply (gas appliances)
+
+
+class DeviceAction(IntEnum):
+    """Device action enumeration for device state control."""
+    NO_ACTION = 0              # Default state
+    POWER_ON = 1               # Power on device
+    WAKE_UP = 2                # Wake up device (already implemented)
+    ENTER_STANDBY = 3          # Enter standby/deep sleep
+
+
+# ... existing code ... 

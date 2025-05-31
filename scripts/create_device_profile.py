@@ -3,7 +3,7 @@
 Create complete device profile configuration.
 
 This script handles the final configuration steps after WiFi setup:
-1. Generate and provision security credentials
+1. Generate and provision security credentials (can be skipped with --skip-provisioning)
 2. Detect device capabilities
 3. Extract program catalog
 4. Create complete device profile JSON
@@ -13,6 +13,8 @@ This is Step 3 of the 3-step configuration process and replaces:
 - provision_device_keys.py 
 - test_capabilities.py
 - dump_program_catalog.py
+
+Use --skip-provisioning when the device is already provisioned with the specified credentials.
 """
 
 import argparse
@@ -29,7 +31,8 @@ from asyncmiele.api.setup_client import MieleSetupClient
 from asyncmiele.models.credentials import MieleCredentials
 from asyncmiele.models.device_profile import DeviceProfile
 from asyncmiele.models.device import MieleDevice
-from asyncmiele.capabilities import DeviceCapability
+from asyncmiele.capabilities import DeviceCapability, detect_capabilities_as_sets
+from asyncmiele.enums import DeviceTypeMiele
 from asyncmiele.config.loader import save_device_profile, load_device_profile
 from asyncmiele.validation.config import ConfigurationValidator, ValidationResult
 from asyncmiele.exceptions.setup import ProvisioningError
@@ -54,6 +57,8 @@ def _make_argparser() -> argparse.ArgumentParser:
                    help="Output path for device profile JSON")
     p.add_argument("--credentials-file",
                    help="Use existing credentials file instead of generating new ones")
+    p.add_argument("--skip-provisioning", action="store_true",
+                   help="Skip credential provisioning (assume device is already provisioned)")
     p.add_argument("--skip-capabilities", action="store_true",
                    help="Skip capability detection (use defaults)")
     p.add_argument("--skip-catalog", action="store_true", 
@@ -82,6 +87,55 @@ def load_credentials_from_file(file_path: str) -> MieleCredentials:
         raise ValueError(f"Failed to load credentials from file: {str(e)}")
 
 
+def convert_device_type_to_enum(device_type_str: str, friendly_name: str = None) -> DeviceTypeMiele:
+    """Convert a device type string to DeviceTypeMiele enum."""
+    # If device type string is empty or unknown, try to use friendly name
+    if not device_type_str or device_type_str == "Unknown":
+        if friendly_name:
+            print(f"Device type detection failed, using friendly name: '{friendly_name}'")
+            device_type_str = friendly_name
+        else:
+            return DeviceTypeMiele.NoUse
+    
+    # Try to match the device type string to an enum value
+    device_type_lower = device_type_str.lower()
+    
+    # Common device type mappings
+    type_mappings = {
+        'oven': DeviceTypeMiele.Oven,
+        'hob': DeviceTypeMiele.Cooktop,
+        'cooktop': DeviceTypeMiele.Cooktop,
+        'induction': DeviceTypeMiele.Cooktop,
+        'dishwasher': DeviceTypeMiele.Dishwasher,
+        'washing machine': DeviceTypeMiele.WashingMachine,
+        'washer': DeviceTypeMiele.WashingMachine,
+        'dryer': DeviceTypeMiele.TumbleDryer,
+        'tumble dryer': DeviceTypeMiele.TumbleDryer,
+        'microwave': DeviceTypeMiele.Microwave,
+        'steam oven': DeviceTypeMiele.SteamOven,
+        'coffee': DeviceTypeMiele.CoffeeMaker,
+        'refrigerator': DeviceTypeMiele.Fridge,
+        'freezer': DeviceTypeMiele.Freezer,
+        'hood': DeviceTypeMiele.Hood,
+    }
+    
+    # Check for direct matches
+    for key, enum_val in type_mappings.items():
+        if key in device_type_lower:
+            print(f"Detected device type: {enum_val} (matched '{key}' in '{device_type_str}')")
+            return enum_val
+    
+    # Try exact enum name match
+    for enum_val in DeviceTypeMiele:
+        if device_type_lower == enum_val.name.lower():
+            print(f"Detected device type: {enum_val} (exact enum match)")
+            return enum_val
+    
+    # Default fallback
+    print(f"Could not determine device type from '{device_type_str}', defaulting to NoUse")
+    return DeviceTypeMiele.NoUse
+
+
 async def provision_credentials_to_device(host: str, credentials: MieleCredentials, timeout: float) -> bool:
     """Provision credentials to device (from provision_device_keys.py)."""
     client = MieleSetupClient(timeout=timeout)
@@ -108,8 +162,8 @@ async def get_device_information(host: str, device_id: str, credentials: MieleCr
     """Get basic device information."""
     client = MieleClient(
         host=host,
-        group_id=credentials.group_id,
-        group_key=credentials.group_key,
+        group_id=credentials.get_id_bytes(),
+        group_key=credentials.get_key_bytes(),
         timeout=timeout
     )
     
@@ -118,73 +172,12 @@ async def get_device_information(host: str, device_id: str, credentials: MieleCr
         return device
 
 
-async def detect_device_capabilities(host: str, device_id: str, credentials: MieleCredentials, timeout: float) -> Tuple[Set[DeviceCapability], Set[DeviceCapability]]:
-    """Detect capabilities (from test_capabilities.py)."""
-    client = MieleClient(
-        host=host,
-        group_id=credentials.group_id,
-        group_key=credentials.group_key,
-        timeout=timeout
-    )
-    
-    supported = set()
-    failed = set()
-    
-    async with client:
-        # Test each capability systematically
-        for capability in DeviceCapability:
-            if capability == DeviceCapability.NONE:
-                continue
-                
-            try:
-                success = await test_single_capability(client, device_id, capability)
-                if success:
-                    supported.add(capability)
-                else:
-                    failed.add(capability)
-                    
-            except Exception:
-                failed.add(capability)
-    
-    return supported, failed
-
-
-async def test_single_capability(client: MieleClient, device_id: str, capability: DeviceCapability) -> bool:
-    """Test a single capability and return success status."""
-    try:
-        if capability == DeviceCapability.STATE_REPORTING:
-            await client.get_device_state(device_id)
-            return True
-        elif capability == DeviceCapability.WAKE_UP:
-            await client.wake_up(device_id)
-            return True
-        elif capability == DeviceCapability.REMOTE_START:
-            can_remote = await client.can_remote_start(device_id)
-            return can_remote
-        elif capability == DeviceCapability.DOP2_BASIC:
-            # Try a simple DOP2 leaf read
-            await client.dop2_read_leaf(device_id, 1, 2)
-            return True
-        elif capability == DeviceCapability.PROGRAM_CATALOG:
-            catalog = await client.extract_program_catalog(device_id)
-            return bool(catalog and catalog.get("programs"))
-        elif capability == DeviceCapability.CONSUMPTION_STATS:
-            stats = await client.get_consumption_stats(device_id)
-            return bool(stats)
-        else:
-            # For other capabilities, assume supported if we got this far
-            return True
-            
-    except Exception:
-        return False
-
-
 async def extract_program_catalog(host: str, device_id: str, credentials: MieleCredentials, timeout: float) -> Tuple[Dict[str, Any], str]:
     """Extract program catalog (from dump_program_catalog.py)."""
     client = MieleClient(
         host=host,
-        group_id=credentials.group_id,
-        group_key=credentials.group_key,
+        group_id=credentials.get_id_bytes(),
+        group_key=credentials.get_key_bytes(),
         timeout=timeout
     )
     
@@ -197,7 +190,7 @@ async def extract_program_catalog(host: str, device_id: str, credentials: MieleC
             pass  # Continue even if wake fails
         
         # Extract catalog using client's method
-        catalog = await client.extract_program_catalog(device_id)
+        catalog = await client.get_program_catalog(device_id)
         extraction_method = catalog.get("extraction_method", "unknown")
         
         return catalog, extraction_method
@@ -236,25 +229,34 @@ async def create_device_profile(args: argparse.Namespace) -> None:
         print(f"Generated GroupKey: {credentials.get_key_hex()[:8]}...{credentials.get_key_hex()[-8:]}")
     
     # Step 3b: Provision Credentials
-    print(f"Provisioning credentials to device at {args.host}...")
-    success = await provision_credentials_to_device(args.host, credentials, args.timeout)
-    if not success:
-        print("❌ Failed to provision credentials")
-        sys.exit(1)
-    print("✅ Credentials provisioned successfully")
+    if args.skip_provisioning:
+        print("⏭️  Skipping credential provisioning (assuming device is already provisioned)")
+        print("⚠️  Note: This assumes the device is already provisioned with the specified credentials")
+    else:
+        print(f"Provisioning credentials to device at {args.host}...")
+        success = await provision_credentials_to_device(args.host, credentials, args.timeout)
+        if not success:
+            print("❌ Failed to provision credentials")
+            sys.exit(1)
+        print("✅ Credentials provisioned successfully")
     
     # Step 3c: Device Information
     print(f"\n🔍 Step 2: Gathering Device Information")
     try:
         device_info = await get_device_information(args.host, args.device_id, credentials, args.timeout)
-        device_type = device_info.ident.type if hasattr(device_info.ident, 'type') else device_info.ident.device_type
+        device_type_str = device_info.ident.type if hasattr(device_info.ident, 'type') else device_info.ident.device_type
         device_name = device_info.ident.device_name if hasattr(device_info.ident, 'device_name') else "Unknown Device"
-        print(f"Device Type: {device_type}")
+        print(f"Device Type: {device_type_str}")
         print(f"Device Name: {device_name}")
     except Exception as e:
         print(f"⚠️  Could not get device information: {e}")
-        device_type = "Unknown"
+        device_type_str = "Unknown"
         device_name = "Unknown Device"
+    
+    # Convert device type string to enum
+    # Use the user-provided friendly name as fallback for device type detection
+    friendly_name_for_detection = args.device_name or device_name
+    device_type = convert_device_type_to_enum(device_type_str, friendly_name_for_detection)
     
     # Step 3d: Capability Detection
     print(f"\n🧪 Step 3: Detecting Capabilities")
@@ -263,9 +265,19 @@ async def create_device_profile(args: argparse.Namespace) -> None:
         capabilities = set()
         failed_capabilities = set()
     else:
-        capabilities, failed_capabilities = await detect_device_capabilities(
-            args.host, args.device_id, credentials, args.timeout
+        # Use library's built-in capability detection
+        client = MieleClient(
+            host=args.host,
+            group_id=credentials.get_id_bytes(),
+            group_key=credentials.get_key_bytes(),
+            timeout=args.timeout
         )
+        
+        async with client:
+            capabilities, failed_capabilities = await detect_capabilities_as_sets(
+                client, args.device_id, device_type
+            )
+        
         print(f"Supported capabilities: {[cap.name for cap in capabilities]}")
         if failed_capabilities:
             print(f"Failed capabilities: {[cap.name for cap in failed_capabilities]}")

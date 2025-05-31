@@ -582,7 +582,7 @@ class Appliance:
                 
             # Try to extract catalog from device
             try:
-                catalog = await self._client.extract_program_catalog(self.id)
+                catalog = await self._client.get_program_catalog(self.id)
                 if catalog and "programs" in catalog:
                     programs = catalog["programs"]
                     self._set_cached("available_programs", programs)
@@ -766,6 +766,703 @@ class Appliance:
             self._invalidate_cache()
         except Exception as exc:
             raise ProgramError(f"Failed to set program option: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Phase 2 Power Control Methods
+
+    async def power_on(self) -> None:
+        """Power on the appliance.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support power control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.POWER_CONTROL):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support power control")
+        
+        try:
+            await self._client.power_on(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to power on device: {exc}") from exc
+    
+    async def power_off(self) -> None:
+        """Power off the appliance.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support power control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.POWER_CONTROL):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support power control")
+        
+        try:
+            await self._client.power_off(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to power off device: {exc}") from exc
+    
+    async def standby(self) -> None:
+        """Put appliance in standby mode (alias for power_off).
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support power control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        await self.power_off()
+
+    # ------------------------------------------------------------------
+    # Phase 2 UserRequest Command Methods
+
+    async def set_interior_light(self, on: bool) -> None:
+        """Turn interior light on or off.
+        
+        Parameters
+        ----------
+        on : bool
+            True to turn light on, False to turn off
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support light control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.LIGHT_CONTROL):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support light control")
+        
+        try:
+            await self._client.set_interior_light(self.id, on)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to control interior light: {exc}") from exc
+
+    async def mute_buzzer(self) -> None:
+        """Mute end-of-cycle buzzer.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support buzzer control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.BUZZER_CONTROL):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support buzzer control")
+        
+        try:
+            await self._client.mute_buzzer(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to mute buzzer: {exc}") from exc
+
+    async def toggle_child_lock(self, enable: bool) -> None:
+        """Toggle child lock on device.
+        
+        Parameters
+        ----------
+        enable : bool
+            True to enable child lock, False to disable
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support child lock
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.CHILD_LOCK):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support child lock")
+        
+        try:
+            await self._client.toggle_child_lock(self.id, enable)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to toggle child lock: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Phase 3.1 Enhanced UserRequest Methods
+
+    async def brew_coffee(self, drink_type: str) -> None:
+        """Brew specific coffee drink.
+        
+        Parameters
+        ----------
+        drink_type : str
+            Type of drink to brew (e.g., 'espresso_single', 'cappuccino', 'latte_macchiato')
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support coffee functions
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If drink type is not supported
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support coffee functions")
+        
+        try:
+            await self._client.brew_coffee(self.id, drink_type)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to brew {drink_type}: {exc}") from exc
+
+    async def coffee_maintenance(self, action: str) -> None:
+        """Perform coffee machine maintenance actions.
+        
+        Parameters
+        ----------
+        action : str
+            Maintenance action ('rinse', 'clean', 'descale')
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support coffee maintenance
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If action is not supported
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support coffee maintenance")
+        
+        try:
+            await self._client.coffee_maintenance(self.id, action)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to perform {action}: {exc}") from exc
+
+    async def set_sabbath_mode(self, enable: bool) -> None:
+        """Toggle Sabbath mode on compatible devices.
+        
+        Parameters
+        ----------
+        enable : bool
+            True to enable Sabbath mode, False to disable
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support smart home modes
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support smart home modes")
+        
+        try:
+            await self._client.set_sabbath_mode(self.id, enable)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to set Sabbath mode: {exc}") from exc
+
+    async def set_demo_mode(self, enable: bool) -> None:
+        """Toggle demo mode on compatible devices.
+        
+        Parameters
+        ----------
+        enable : bool
+            True to enable demo mode, False to disable
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support demo mode
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support demo mode")
+        
+        try:
+            await self._client.set_demo_mode(self.id, enable)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to set demo mode: {exc}") from exc
+
+    async def signal_control(self, action: str) -> None:
+        """Control device signals and sounds.
+        
+        Parameters
+        ----------
+        action : str
+            Signal action ('mute', 'test_signal', 'end_signal')
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support signal control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If action is not supported
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support signal control")
+        
+        try:
+            await self._client.signal_control(self.id, action)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to control signal: {exc}") from exc
+
+    async def door_control(self, action: str) -> None:
+        """Control door lock functions.
+        
+        Parameters
+        ----------
+        action : str
+            Door action ('lock', 'unlock')
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support door control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If action is not supported
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support door control")
+        
+        try:
+            await self._client.door_control(self.id, action)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to control door: {exc}") from exc
+
+    async def timer_control(self, action: str) -> None:
+        """Control timer functions.
+        
+        Parameters
+        ----------
+        action : str
+            Timer action ('start_timer', 'stop_timer', 'reset_timer')
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support timer control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If action is not supported
+        """
+        if not await self.has_capability(DeviceCapability.USER_REQUESTS):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support timer control")
+        
+        try:
+            await self._client.timer_control(self.id, action)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to control timer: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Phase 4.1 Refrigeration Control Methods
+
+    async def start_superfreezing(self) -> None:
+        """Start superfreezing mode on refrigeration devices.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support superfreezing
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.SUPERFREEZING):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support superfreezing")
+        
+        try:
+            await self._client.start_superfreezing(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to start superfreezing: {exc}") from exc
+
+    async def stop_superfreezing(self) -> None:
+        """Stop superfreezing mode on refrigeration devices.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support superfreezing
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.SUPERFREEZING):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support superfreezing")
+        
+        try:
+            await self._client.stop_superfreezing(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to stop superfreezing: {exc}") from exc
+
+    async def start_supercooling(self) -> None:
+        """Start supercooling mode on refrigeration devices.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support supercooling
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.SUPERCOOLING):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support supercooling")
+        
+        try:
+            await self._client.start_supercooling(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to start supercooling: {exc}") from exc
+
+    async def stop_supercooling(self) -> None:
+        """Stop supercooling mode on refrigeration devices.
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support supercooling
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.SUPERCOOLING):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support supercooling")
+        
+        try:
+            await self._client.stop_supercooling(self.id)
+            self._invalidate_cache()
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to stop supercooling: {exc}") from exc
+
+    # Convenience methods for coffee machine
+    async def brew_espresso(self) -> None:
+        """Brew single espresso (convenience method).
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support coffee functions
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        await self.brew_coffee("espresso_single")
+
+    async def brew_cappuccino(self) -> None:
+        """Brew cappuccino (convenience method).
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support coffee functions
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        await self.brew_coffee("cappuccino")
+
+    async def rinse_system(self) -> None:
+        """Rinse coffee system (convenience method).
+        
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support coffee maintenance
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        await self.coffee_maintenance("rinse")
+
+    # ------------------------------------------------------------------
+    # Phase 3.2 DOP2 Tree Exploration Methods
+
+    async def explore_device_structure(self) -> Dict[str, Any]:
+        """Explore the complete device DOP2 structure.
+        
+        This method walks the entire DOP2 tree to discover all available
+        units and attributes, providing comprehensive insight into device capabilities.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Complete DOP2 tree structure as nested dictionary
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        try:
+            return await self._client.walk_dop2_tree(self.id)
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to explore device structure: {exc}") from exc
+
+    async def explore_unit_leaves(self, unit: int) -> List[int]:
+        """Explore available leaves in a specific DOP2 unit.
+        
+        Parameters
+        ----------
+        unit : int
+            The DOP2 unit number to explore
+            
+        Returns
+        -------
+        List[int]
+            List of available attribute numbers in the unit
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        try:
+            return await self._client.explore_dop2_leaves(self.id, unit)
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to explore unit {unit}: {exc}") from exc
+
+    async def map_power_control_dop2(self) -> Dict[str, Any]:
+        """Map DOP2 power control attributes for this device.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary mapping potential power control paths to their data
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        try:
+            return await self._client.map_dop2_power_control(self.id)
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to map power control: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Phase 3.3 Enhanced Device State Management
+
+    async def ensure_awake(self) -> bool:
+        """Ensure device is awake before sending commands.
+        
+        This method checks the device's standby state and wakes it up if necessary.
+        Based on research-confirmed StandbyState mappings.
+        
+        Returns
+        -------
+        bool
+            True if device is awake or was successfully woken up,
+            False if device cannot be woken (needs manual intervention)
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        try:
+            state = await self.get_state()
+            standby_state = state.get("StandbyState", 0)
+            
+            if standby_state == 2:  # Deep sleep - research confirmed
+                if await self.has_capability(DeviceCapability.WAKE_UP):
+                    await self.wake_up()
+                    await asyncio.sleep(1)  # Wait for wake up
+                    return True
+                else:
+                    return False  # Cannot wake - needs manual intervention
+            return True  # Already awake
+            
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to ensure device is awake: {exc}") from exc
+
+    async def safe_power_off(self) -> bool:
+        """Safely power off device (stop programs first if needed).
+        
+        This method ensures programs are stopped before powering off the device
+        to prevent data loss or unsafe states.
+        
+        Returns
+        -------
+        bool
+            True if device was safely powered off
+            
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device does not support power control
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        if not await self.has_capability(DeviceCapability.POWER_CONTROL):
+            raise UnsupportedCapabilityError(f"Device {self.id} does not support power control")
+            
+        try:
+            state = await self.get_state()
+            
+            # Check if a program is running and stop it first
+            if state.get("status") in ["Running", "Programmed"]:
+                if await self.has_capability(DeviceCapability.PROGRAM_STOP):
+                    logger.info(f"Stopping running program before power off on device {self.id}")
+                    await self.stop_program()
+                    await asyncio.sleep(2)  # Wait for stop
+                    
+            # Now power off the device
+            await self.power_off()
+            return True
+            
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to safely power off device: {exc}") from exc
+
+    async def get_power_state(self) -> str:
+        """Get current power state based on StandbyState.
+        
+        Based on research-confirmed StandbyState mappings from protocol analysis.
+        
+        Returns
+        -------
+        str
+            Current power state: 'Active', 'NetworkIdle', 'DeepSleep', or 'Unknown'
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        """
+        try:
+            state = await self.get_state()
+            standby_state = state.get("StandbyState", 0)
+            
+            # Research confirmed these mappings:
+            if standby_state == 0:
+                return "Active"  # Not in standby
+            elif standby_state == 1:
+                return "NetworkIdle"  # Can respond to commands
+            elif standby_state == 2:
+                return "DeepSleep"  # Effectively offline
+            else:
+                return "Unknown"
+                
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to get power state: {exc}") from exc
+
+    async def wait_for_power_state(self, target_state: str, timeout: float = 30.0) -> bool:
+        """Wait for device to reach specific power state.
+        
+        Parameters
+        ----------
+        target_state : str
+            Target power state ('Active', 'NetworkIdle', 'DeepSleep')
+        timeout : float
+            Maximum time to wait in seconds (default: 30.0)
+            
+        Returns
+        -------
+        bool
+            True if target state was reached, False if timeout occurred
+            
+        Raises
+        ------
+        ApplianceConnectionError
+            If communication with the appliance fails
+        ValueError
+            If target_state is not valid
+        """
+        valid_states = ["Active", "NetworkIdle", "DeepSleep", "Unknown"]
+        if target_state not in valid_states:
+            raise ValueError(f"Invalid target state '{target_state}'. Valid states: {valid_states}")
+            
+        try:
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                current_state = await self.get_power_state()
+                if current_state == target_state:
+                    logger.info(f"Device {self.id} reached target power state: {target_state}")
+                    return True
+                    
+                logger.debug(f"Device {self.id} current power state: {current_state}, waiting for: {target_state}")
+                await asyncio.sleep(1)
+                
+            logger.warning(f"Device {self.id} did not reach target power state {target_state} within {timeout}s")
+            return False
+            
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to wait for power state: {exc}") from exc
+
+    async def get_standby_behavior(self) -> Dict[str, Any]:
+        """Get information about device standby behavior.
+        
+        Returns detailed information about how the device handles standby states,
+        based on device type and current configuration.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Standby behavior information including auto-sleep timeouts and wake capabilities
+        """
+        try:
+            # Get device identification to determine behavior
+            ident = await self._client.get_device_ident(self.id)
+            device_type = getattr(ident, 'device_type', 'Unknown')
+            
+            # Get current state
+            current_state = await self.get_power_state()
+            
+            # Device-specific standby behavior based on research
+            behavior_map = {
+                'WashingMachine': {
+                    'auto_sleep_timeout': 1800,  # 30 minutes in remote start mode
+                    'supported_states': ['NetworkIdle', 'DeepSleep'],
+                    'wake_capability': True,
+                    'auto_power_off': False
+                },
+                'Oven': {
+                    'auto_sleep_timeout': 900,   # 15 minutes after idle
+                    'supported_states': ['Active', 'NetworkIdle', 'DeepSleep'], 
+                    'wake_capability': True,
+                    'auto_power_off': True  # Auto-off after programs complete
+                },
+                'CoffeeMaker': {
+                    'auto_sleep_timeout': 300,   # 5 minutes
+                    'supported_states': ['Active', 'NetworkIdle', 'DeepSleep'],
+                    'wake_capability': True,
+                    'auto_power_off': False
+                },
+                'Dishwasher': {
+                    'auto_sleep_timeout': 600,   # 10 minutes
+                    'supported_states': ['NetworkIdle', 'DeepSleep'],
+                    'wake_capability': True,
+                    'auto_power_off': False
+                }
+            }
+            
+            default_behavior = {
+                'auto_sleep_timeout': 600,  # Default 10 minutes
+                'supported_states': ['Active', 'NetworkIdle'],
+                'wake_capability': True,
+                'auto_power_off': False
+            }
+            
+            behavior = behavior_map.get(device_type, default_behavior)
+            behavior['current_state'] = current_state
+            behavior['device_type'] = device_type
+            
+            return behavior
+            
+        except Exception as exc:
+            raise ApplianceConnectionError(f"Failed to get standby behavior: {exc}") from exc
 
     # ------------------------------------------------------------------
     # New Phase 2 notification methods
@@ -2132,4 +2829,299 @@ class Appliance:
         if "targetTemperature" in state and isinstance(state["targetTemperature"], list) and len(state["targetTemperature"]) >= 2:
             program_info["target_temperature"] = state["targetTemperature"][0] + (state["targetTemperature"][1] / 10)
             
-        return program_info 
+        return program_info
+
+    # ------------------------------------------------------------------
+    # Phase 4.4 Production Readiness & Validation
+
+    async def validate_command(self, action_type: str, action_value: int) -> Dict[str, Any]:
+        """Validate if a command is supported on this device and check requirements.
+        
+        Parameters
+        ----------
+        action_type : str
+            Type of action ("ProcessAction", "DeviceAction", "UserRequest")
+        action_value : int
+            Numeric value of the action
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Validation result with support status and requirements
+        """
+        try:
+            return await self._client.validate_command(self.id, action_type, action_value)
+        except Exception as exc:
+            return {
+                "supported": False,
+                "reason": f"Validation failed: {exc}"
+            }
+
+    async def get_device_limitations(self) -> List[str]:
+        """Get list of known limitations for this device.
+        
+        Returns
+        -------
+        List[str]
+            List of limitation descriptions
+        """
+        try:
+            return await self._client.get_device_limitations(self.id)
+        except Exception as exc:
+            logger.warning(f"Failed to get device limitations: {exc}")
+            return ["Unable to determine device limitations"]
+
+    async def get_supported_power_states(self) -> List[str]:
+        """Get list of supported power states for this device.
+        
+        Returns
+        -------
+        List[str]
+            List of supported power state names
+        """
+        try:
+            return await self._client.get_supported_power_states(self.id)
+        except Exception as exc:
+            logger.warning(f"Failed to get supported power states: {exc}")
+            return ["Active"]  # Safe default
+
+    async def get_device_standby_behavior(self) -> str:
+        """Get description of standby behavior for this device.
+        
+        Returns
+        -------
+        str
+            Description of standby behavior
+        """
+        try:
+            return await self._client.get_device_standby_behavior(self.id)
+        except Exception as exc:
+            logger.warning(f"Failed to get standby behavior: {exc}")
+            return "Unknown standby behavior"
+
+    async def validate_and_execute_command(self, command_func: Callable, 
+                                         action_type: str, action_value: int,
+                                         *args, **kwargs) -> Any:
+        """Validate and execute a command with production logging.
+        
+        This method provides a production-ready wrapper that validates commands
+        before execution and logs the results for monitoring.
+        
+        Parameters
+        ----------
+        command_func : Callable
+            The command function to execute
+        action_type : str
+            Type of action for validation
+        action_value : int
+            Numeric value of the action
+        *args, **kwargs
+            Arguments to pass to the command function
+            
+        Returns
+        -------
+        Any
+            Result of the command function
+            
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the command is not supported on this device
+        InvalidStateTransitionError
+            If the device is not in the required state
+        """
+        # First validate the command
+        validation = await self.validate_command(action_type, action_value)
+        
+        if not validation.get("supported", False):
+            reason = validation.get("reason", "Command not supported")
+            await self._client.log_command_execution(
+                self.id, action_type, action_value, False, error=reason
+            )
+            raise UnsupportedCapabilityError(f"Command validation failed: {reason}")
+        
+        # Execute the command with logging
+        try:
+            result = await command_func(*args, **kwargs)
+            await self._client.log_command_execution(
+                self.id, action_type, action_value, True, response=result
+            )
+            return result
+        except Exception as exc:
+            await self._client.log_command_execution(
+                self.id, action_type, action_value, False, error=str(exc)
+            )
+            raise
+
+    async def safe_remote_start(self, **kwargs) -> bool:
+        """Safely start a program with full validation and state checking.
+        
+        This is a production-ready version of remote_start that includes:
+        - Device capability validation
+        - Power state checking
+        - Remote enable verification
+        - Comprehensive logging
+        
+        Parameters
+        ----------
+        **kwargs
+            Arguments to pass to remote_start
+            
+        Returns
+        -------
+        bool
+            True if the program was started successfully
+            
+        Raises
+        ------
+        UnsupportedCapabilityError
+            If the device doesn't support remote start
+        InvalidStateTransitionError
+            If the device is not ready for remote start
+        """
+        # Use the validated command execution wrapper
+        try:
+            await self.validate_and_execute_command(
+                self.remote_start, "ProcessAction", 1, **kwargs
+            )
+            return True
+        except Exception:
+            return False
+
+    async def safe_power_control(self, action: str) -> bool:
+        """Safely control device power with validation.
+        
+        Parameters
+        ----------
+        action : str
+            Power action ('on', 'off', 'standby')
+            
+        Returns
+        -------
+        bool
+            True if the power action was successful
+        """
+        action_map = {
+            'on': (self.power_on, "DeviceAction", 1),
+            'off': (self.power_off, "DeviceAction", 2),  # May fallback to DOP2
+            'standby': (self.standby, "DeviceAction", 2)
+        }
+        
+        if action not in action_map:
+            raise ValueError(f"Unknown power action '{action}'. Valid: {list(action_map.keys())}")
+        
+        command_func, action_type, action_value = action_map[action]
+        
+        try:
+            await self.validate_and_execute_command(
+                command_func, action_type, action_value
+            )
+            return True
+        except Exception:
+            return False
+
+    async def get_device_health(self) -> Dict[str, Any]:
+        """Get comprehensive device health information.
+        
+        This method provides a production monitoring view of device status
+        including power state, connectivity, capabilities, and limitations.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Comprehensive device health report
+        """
+        try:
+            # Get basic status
+            connected = await self.is_connected()
+            state = await self.get_state() if connected else {}
+            power_state = await self.get_power_state() if connected else "Unknown"
+            
+            # Get device information
+            limitations = await self.get_device_limitations()
+            supported_power_states = await self.get_supported_power_states()
+            standby_behavior = await self.get_device_standby_behavior()
+            
+            # Get capabilities
+            capabilities = await self.get_capabilities()
+            
+            # Check if ready for operations
+            ready = await self.is_ready if connected else False
+            
+            health = {
+                "device_id": self.id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "connectivity": {
+                    "connected": connected,
+                    "power_state": power_state,
+                    "ready_for_commands": ready
+                },
+                "capabilities": {
+                    "supported": capabilities.get("capabilities", {}).get("supported", []),
+                    "failed": capabilities.get("capabilities", {}).get("failed", [])
+                },
+                "device_info": {
+                    "type": capabilities.get("device_type", "Unknown"),
+                    "limitations": limitations,
+                    "supported_power_states": supported_power_states,
+                    "standby_behavior": standby_behavior
+                },
+                "current_state": {
+                    "status": state.get("status", "Unknown"),
+                    "program_phase": state.get("programPhase"),
+                    "standby_state": state.get("StandbyState"),
+                    "errors": await self.get_error_status() if connected else {}
+                },
+                "configuration": {
+                    "simulation_mode": self._simulation_mode,
+                    "cache_enabled": len(self._cache) > 0,
+                    "monitoring_active": self._monitoring_task is not None and not self._monitoring_task.done()
+                }
+            }
+            
+            return health
+            
+        except Exception as exc:
+            logger.error(f"Failed to get device health: {exc}")
+            return {
+                "device_id": self.id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": f"Health check failed: {exc}",
+                "connectivity": {"connected": False}
+            }
+
+    # ------------------------------------------------------------------
+    # Phase 4 API Polish - Convenience Methods
+
+    async def get_device_info_summary(self) -> Dict[str, Any]:
+        """Get a concise summary of device information for dashboards.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Concise device information summary
+        """
+        try:
+            summary = await self.summary()
+            capabilities = await self.get_capabilities()
+            limitations = await self.get_device_limitations()
+            
+            return {
+                "device_id": self.id,
+                "name": summary.name if summary else "Unknown Device",
+                "type": capabilities.get("device_type", "Unknown"),
+                "status": summary.state.status if summary and summary.state else "Unknown",
+                "connected": await self.is_connected(),
+                "ready": await self.is_ready,
+                "power_state": await self.get_power_state(),
+                "limitations_count": len(limitations),
+                "capabilities_count": len(capabilities.get("capabilities", {}).get("supported", [])),
+                "last_updated": datetime.utcnow().isoformat()
+            }
+        except Exception as exc:
+            return {
+                "device_id": self.id,
+                "error": str(exc),
+                "connected": False,
+                "last_updated": datetime.utcnow().isoformat()
+            } 

@@ -108,16 +108,24 @@ Output shows devices with their information:
 
 ### Step 2: Configure Device WiFi
 
-Use the temporary SSID from Step 1 to configure the device's WiFi:
+**Important:** Before running this script, manually connect your computer to the device's WiFi access point (e.g., "Miele_ABC123" from Step 1).
+
+Configure the device to connect to your home WiFi network:
 
 ```bash
 python scripts/configure_device_wifi.py \
-    --ap-ssid "Miele_ABC123" \
     --ssid "YourHomeWiFi" \
     --password "your_wifi_password"
 ```
 
-The device will connect to your WiFi network and get a new IP address.
+This script sends the WiFi configuration directly to the device using the same approach as MieleRESTServer. The device will disconnect from its access point and connect to your WiFi network, receiving a new IP address.
+
+**Note:** The script assumes you are already connected to the device's temporary WiFi access point. This manual connection step ensures reliable communication during WiFi configuration.
+
+**Testing:** Use `--dry-run` to see what configuration would be sent without actually sending it:
+```bash
+python scripts/configure_device_wifi.py --ssid "YourHomeWiFi" --password "your_wifi_password" --dry-run
+```
 
 ### Step 3: Create Device Profile
 
@@ -371,7 +379,10 @@ appliance = await Appliance.from_config_file("device_config.json")
 
 ### Device Setup Issues
 - **Device not found in Step 1**: Make sure the device is in setup mode (usually by holding a button)
-- **WiFi configuration fails in Step 2**: Verify the WiFi credentials and security type
+- **WiFi configuration fails in Step 2**: 
+  - Ensure you are manually connected to the device's WiFi access point before running the script
+  - Verify the WiFi credentials and security type are correct
+  - Check that the device is reachable at 192.168.1.1 (or use --device-ip for different addresses)
 - **Profile creation fails in Step 3**: Check network connectivity and device accessibility
 
 ### Runtime Issues
@@ -580,8 +591,8 @@ The library includes streamlined scripts for device setup:
 # Step 1: Find devices in setup mode
 python scripts/discover_setup_devices.py
 
-# Step 2: Configure WiFi (existing functionality)
-python scripts/configure_device_wifi.py --ap-ssid "Miele_ABC123" --ssid "WiFi" --password "pass"
+# Step 2: Configure WiFi (manual connection to device required)
+python scripts/configure_device_wifi.py --ssid "YourWiFi" --password "password"
 
 # Step 3: Create complete profile
 python scripts/create_device_profile.py --host 192.168.1.100 --device-id 000123456789 --output config.json

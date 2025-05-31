@@ -4,6 +4,24 @@ Configure WiFi settings for a Miele device in setup mode.
 
 This script provides a command-line interface for configuring a Miele device's
 WiFi settings when it's in setup mode.
+
+This script assumes that connection to the device's WiFi access point has 
+already been established manually.
+
+USAGE:
+    1. Manually connect to the Miele device's WiFi access point
+       (usually named something like "Miele_XXXXXX")
+    
+    2. Run this script to configure the device's WiFi:
+       python configure_device_wifi.py --ssid "MyWiFi" --password "mypassword"
+    
+    3. The device will disconnect from its access point and connect to your WiFi
+
+This script mimics the exact behavior of the MieleRESTServer provision-wifi.sh script,
+which uses a simple HTTP PUT request to the /WLAN endpoint with JSON payload.
+
+Example payload sent to device:
+    {"SSID": "MyWiFi", "Sec": "WPA2", "Key": "mypassword"}
 """
 
 import argparse
@@ -13,10 +31,7 @@ import sys
 import logging
 from typing import Dict, Any, Optional
 
-from asyncmiele.api.setup_client import MieleSetupClient
-from asyncmiele.models.network_config import MieleNetworkConfig, SecurityType
-from asyncmiele.utils.provisioning import detect_setup_mode_ssid, connect_to_miele_ap, get_default_ap_password
-from asyncmiele.exceptions.setup import AccessPointConnectionError, WifiConfigurationError
+import aiohttp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -31,115 +46,120 @@ def _make_argparser() -> argparse.ArgumentParser:
                    help="SSID of the WiFi network to configure the device to connect to")
     p.add_argument("--password", required=False,
                    help="Password for the WiFi network (required for WPA/WPA2 networks)")
-    p.add_argument("--security", choices=["none", "wep", "wpa", "wpa2", "wpa2psk", "wpawpa2"],
-                   default="wpa2", help="Security type of the WiFi network (default: wpa2)")
-    p.add_argument("--hidden", action="store_true",
-                   help="Indicate that the WiFi network is hidden")
-    p.add_argument("--ap-host", default="192.168.1.1",
+    p.add_argument("--security", choices=["None", "WEP", "WPA-PSK", "WPA2", "WPA2-PSK", "WPA/WPA2-PSK"],
+                   default="WPA2", help="Security type of the WiFi network (default: WPA2)")
+    p.add_argument("--device-ip", default="192.168.1.1",
                    help="IP address of the device in setup mode (default: 192.168.1.1)")
-    p.add_argument("--ap-ssid",
-                   help="SSID of the Miele access point to connect to (if not already connected)")
-    p.add_argument("--ap-password",
-                   help="Password for the Miele access point (if needed)")
-    p.add_argument("--timeout", type=float, default=5.0,
-                   help="Timeout for API requests in seconds (default: 5.0)")
-    p.add_argument("--use-https", action="store_true",
-                   help="Use HTTPS instead of HTTP for API requests")
-    p.add_argument("--retry-count", type=int, default=2,
-                   help="Number of retries on failure (default: 2)")
-    p.add_argument("--auto-connect", action="store_true",
-                   help="Automatically connect to Miele access point if detected")
-    p.add_argument("--scan", action="store_true",
-                   help="Scan for Miele access points")
+    p.add_argument("--timeout", type=float, default=10.0,
+                   help="Timeout for API requests in seconds (default: 10.0)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Show what would be sent without actually sending it")
     return p
 
 
-def _security_type_from_arg(security_arg: str) -> SecurityType:
-    """Convert command-line security argument to SecurityType enum."""
-    security_map = {
-        "none": SecurityType.NONE,
-        "wep": SecurityType.WEP,
-        "wpa": SecurityType.WPA_PSK,
-        "wpa2": SecurityType.WPA2,
-        "wpa2psk": SecurityType.WPA2_PSK,
-        "wpawpa2": SecurityType.WPA_WPA2_PSK,
+async def configure_wifi_simple(device_ip: str, ssid: str, security: str, password: Optional[str], timeout: float, dry_run: bool = False) -> bool:
+    """
+    Configure WiFi settings using the exact same approach as MieleRESTServer.
+    
+    This mimics the wget command:
+    wget -O - --method=PUT --body-file=wifi.json 192.168.1.1/WLAN
+    
+    Args:
+        device_ip: IP address of the device
+        ssid: WiFi network SSID
+        security: Security type (None, WEP, WPA-PSK, WPA2, WPA2-PSK, WPA/WPA2-PSK)
+        password: WiFi password (None for open networks)
+        timeout: Request timeout in seconds
+        dry_run: If True, only show what would be sent without sending it
+        
+    Returns:
+        True if configuration was successful (or if dry_run is True)
+    """
+    # Prepare the JSON payload exactly like MieleRESTServer
+    wifi_config = {
+        "SSID": ssid,
+        "Sec": security,
     }
-    return security_map.get(security_arg.lower(), SecurityType.WPA2)
+    
+    # Only include Key if password is provided and security is not None
+    if security != "None" and password:
+        wifi_config["Key"] = password
+    
+    url = f"http://{device_ip}/WLAN"
+    
+    logger.info(f"Configuring WiFi on device at {device_ip}")
+    logger.info(f"Network: {ssid} (Security: {security})")
+    logger.info(f"URL: {url}")
+    logger.info(f"Payload: {json.dumps(wifi_config, indent=2)}")
+    
+    if dry_run:
+        logger.info("DRY RUN: Not actually sending the request")
+        return True
+    
+    try:
+        # Create HTTP session with specific timeout
+        timeout_config = aiohttp.ClientTimeout(total=timeout)
+        
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            # Send PUT request with JSON payload
+            async with session.put(
+                url,
+                json=wifi_config,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "MieleWiFiConfig/1.0"
+                }
+            ) as response:
+                
+                # Log the response
+                response_text = await response.text()
+                logger.info(f"Response status: {response.status}")
+                logger.info(f"Response body: {response_text}")
+                
+                # Consider any 2xx status as success
+                if 200 <= response.status < 300:
+                    logger.info("WiFi configuration successful!")
+                    logger.info(f"Device will connect to network: {ssid}")
+                    logger.info("Note: The device may take some time to connect to the network.")
+                    logger.info("After connection, the device will no longer be accessible via its access point.")
+                    return True
+                else:
+                    logger.error(f"WiFi configuration failed with status {response.status}")
+                    logger.error(f"Response: {response_text}")
+                    return False
+                    
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Failed to connect to device at {device_ip}: {e}")
+        logger.error("Make sure you are connected to the device's WiFi access point")
+        return False
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP request failed: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return False
 
 
 async def configure_and_output(args: argparse.Namespace) -> None:
     """Configure WiFi settings for a Miele device."""
-    # First, check if we need to scan for Miele access points
-    if args.scan:
-        logger.info("Scanning for Miele access points...")
-        miele_ssids = detect_setup_mode_ssid()
-        if miele_ssids:
-            logger.info(f"Found Miele access points: {', '.join(miele_ssids)}")
-            if args.auto_connect and not args.ap_ssid:
-                # Auto-connect to the first Miele access point found
-                args.ap_ssid = miele_ssids[0]
-                logger.info(f"Auto-connecting to: {args.ap_ssid}")
-        else:
-            logger.info("No Miele access points found")
-            if args.auto_connect:
-                logger.error("Cannot auto-connect: No Miele access points found")
-                sys.exit(1)
     
-    # If ap_ssid is specified, try to connect to it
-    if args.ap_ssid:
-        logger.info(f"Connecting to Miele access point: {args.ap_ssid}")
-        password = args.ap_password
-        
-        # If no password provided, try to use the default password
-        if not password:
-            password = get_default_ap_password(args.ap_ssid)
-        
-        try:
-            connect_to_miele_ap(args.ap_ssid, password)
-            logger.info(f"Successfully connected to {args.ap_ssid}")
-        except AccessPointConnectionError as e:
-            logger.error(f"Failed to connect to Miele access point: {str(e)}")
-            sys.exit(1)
-    
-    # Create network configuration
-    security_type = _security_type_from_arg(args.security)
-    network_config = MieleNetworkConfig(
-        ssid=args.ssid,
-        security_type=security_type,
-        password=args.password,
-        hidden=args.hidden
-    )
-    
-    # Create setup client
-    client = MieleSetupClient(
-        host=args.ap_host,
-        timeout=args.timeout
-    )
-    
-    # Configure WiFi
-    try:
-        async with client:
-            logger.info(f"Configuring device at {args.ap_host} to connect to network: {args.ssid}")
-            success = await client.configure_wifi(
-                network_config=network_config,
-                use_https=args.use_https,
-                retry_count=args.retry_count
-            )
-            
-            if success:
-                logger.info("WiFi configuration successful!")
-                logger.info(f"The device will now connect to: {args.ssid}")
-                logger.info("Note: The device may take some time to connect to the network.")
-                logger.info("After connection, the device will no longer be accessible via its access point.")
-            else:
-                logger.error("WiFi configuration failed")
-                sys.exit(1)
-                
-    except WifiConfigurationError as e:
-        logger.error(f"WiFi configuration error: {str(e)}")
+    # Validate that password is provided for secured networks
+    if args.security != "None" and not args.password:
+        logger.error(f"Password is required for {args.security} networks")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
+    
+    # Configure WiFi using the simple approach
+    success = await configure_wifi_simple(
+        device_ip=args.device_ip,
+        ssid=args.ssid,
+        security=args.security,
+        password=args.password,
+        timeout=args.timeout,
+        dry_run=args.dry_run
+    )
+    
+    if not success:
+        logger.error("WiFi configuration failed")
         sys.exit(1)
 
 
@@ -150,10 +170,6 @@ async def _async_main(args: argparse.Namespace) -> None:
 def main():
     parser = _make_argparser()
     args = parser.parse_args()
-    
-    # Validate arguments
-    if args.security.lower() != "none" and not args.password:
-        parser.error("Password is required for secured WiFi networks")
     
     try:
         asyncio.run(_async_main(args))

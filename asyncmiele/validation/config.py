@@ -137,7 +137,7 @@ class ConfigurationValidator:
         elif capability == DeviceCapability.REMOTE_START:
             await client.can_remote_start(device_id)
         elif capability == DeviceCapability.PROGRAM_CATALOG:
-            catalog = await client.extract_program_catalog(device_id)
+            catalog = await client.get_program_catalog(device_id)
             if not catalog or not catalog.get("programs"):
                 raise Exception("Program catalog extraction returned empty result")
         # For other capabilities, we just pass - validation is basic

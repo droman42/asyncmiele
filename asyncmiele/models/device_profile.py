@@ -111,6 +111,10 @@ class DeviceProfile(BaseModel):
         """Export with grouped capabilities and flat structure for JSON files."""
         data = self.model_dump(exclude={'capabilities', 'failed_capabilities', 'capability_detection_date'})
         
+        # Fix device_type serialization - convert enum to name string
+        if 'device_type' in data:
+            data['device_type'] = self.device_type.name
+        
         # Group capabilities
         data['capabilities'] = {
             'supported': [cap.name for cap in self.capabilities],
@@ -123,6 +127,15 @@ class DeviceProfile(BaseModel):
     @classmethod
     def from_json_friendly(cls, data: Dict[str, Any]) -> 'DeviceProfile':
         """Create from JSON with grouped capabilities converted to enum sets."""
+        # Handle device_type conversion from name string to enum
+        if 'device_type' in data and isinstance(data['device_type'], str):
+            device_type_name = data['device_type']
+            if hasattr(DeviceTypeMiele, device_type_name):
+                data['device_type'] = getattr(DeviceTypeMiele, device_type_name)
+            else:
+                # Fallback to NoUse if enum name not found
+                data['device_type'] = DeviceTypeMiele.NoUse
+        
         # Handle grouped capabilities structure
         if 'capabilities' in data and isinstance(data['capabilities'], dict):
             caps_data = data.pop('capabilities')

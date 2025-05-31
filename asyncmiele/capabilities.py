@@ -36,12 +36,30 @@ class DeviceCapability(Flag):
     PROGRAM_SELECTION = auto()     # Device supports program selection
     PARAMETER_SELECTION = auto()   # Device supports parameter selection
     
+    # Program control capabilities (Phase 1 additions)
+    PROGRAM_STOP = auto()          # Device supports stopping programs
+    PROGRAM_PAUSE = auto()         # Device supports pausing programs  
+    PROGRAM_RESUME = auto()        # Device supports resuming programs
+    PROGRAM_OPTION_MODIFY = auto() # Device supports modifying options
+    
+    # Advanced device capabilities (Phase 1 additions)
+    SUPERFREEZING = auto()         # Device supports SuperFreeze function
+    SUPERCOOLING = auto()          # Device supports SuperCool function
+    GAS_CONTROL = auto()           # Device supports gas enable/disable
+    
     # DOP2 capabilities
     DOP2_BASIC = auto()            # Device supports basic DOP2 access
     DOP2_ADVANCED = auto()         # Device supports advanced DOP2 features
     
     # Data capabilities
     CONSUMPTION_STATS = auto()     # Device provides consumption statistics
+    
+    # Power control capabilities (Phase 2 additions)
+    POWER_CONTROL = auto()         # Device supports power off/standby
+    LIGHT_CONTROL = auto()         # Device supports interior light control
+    USER_REQUESTS = auto()         # Device supports UserRequest commands
+    BUZZER_CONTROL = auto()        # Device supports buzzer mute
+    CHILD_LOCK = auto()            # Device supports child lock toggle
 
 
 # Predefined capability sets for different device types (converted to sets)
@@ -52,7 +70,15 @@ DEFAULT_CAPABILITIES = {
         DeviceCapability.WAKE_UP,
         DeviceCapability.REMOTE_START,
         DeviceCapability.PROGRAM_CATALOG,
-        DeviceCapability.DOP2_BASIC
+        DeviceCapability.DOP2_BASIC,
+        # Phase 1 additions for washing machines
+        DeviceCapability.PROGRAM_STOP,
+        DeviceCapability.PROGRAM_PAUSE,
+        DeviceCapability.PROGRAM_RESUME,
+        # Phase 2 additions for washing machines
+        DeviceCapability.BUZZER_CONTROL,
+        DeviceCapability.CHILD_LOCK,
+        DeviceCapability.USER_REQUESTS,
     },
     DeviceType.TumbleDryer: {
         DeviceCapability.STATE_REPORTING,
@@ -60,7 +86,14 @@ DEFAULT_CAPABILITIES = {
         DeviceCapability.WAKE_UP,
         DeviceCapability.REMOTE_START,
         DeviceCapability.PROGRAM_CATALOG,
-        DeviceCapability.DOP2_BASIC
+        DeviceCapability.DOP2_BASIC,
+        # Phase 1 additions for dryers
+        DeviceCapability.PROGRAM_STOP,
+        DeviceCapability.PROGRAM_PAUSE,
+        DeviceCapability.PROGRAM_RESUME,
+        # Phase 2 additions for dryers
+        DeviceCapability.BUZZER_CONTROL,
+        DeviceCapability.USER_REQUESTS,
     },
     DeviceType.Dishwasher: {
         DeviceCapability.STATE_REPORTING,
@@ -68,7 +101,14 @@ DEFAULT_CAPABILITIES = {
         DeviceCapability.WAKE_UP,
         DeviceCapability.REMOTE_START,
         DeviceCapability.PROGRAM_CATALOG,
-        DeviceCapability.DOP2_BASIC
+        DeviceCapability.DOP2_BASIC,
+        # Phase 1 additions for dishwashers
+        DeviceCapability.PROGRAM_STOP,
+        # Note: No PROGRAM_PAUSE for dishwashers per research
+        # Phase 2 additions for dishwashers
+        DeviceCapability.BUZZER_CONTROL,
+        DeviceCapability.LIGHT_CONTROL,  # Some models
+        DeviceCapability.USER_REQUESTS,
     },
     DeviceType.Oven: {
         DeviceCapability.STATE_REPORTING,
@@ -76,7 +116,66 @@ DEFAULT_CAPABILITIES = {
         DeviceCapability.WAKE_UP,
         DeviceCapability.REMOTE_START,
         DeviceCapability.PROGRAM_CATALOG,
-        DeviceCapability.DOP2_BASIC
+        DeviceCapability.DOP2_BASIC,
+        # Phase 1 additions for ovens
+        DeviceCapability.PROGRAM_STOP,
+        # Note: No PROGRAM_PAUSE for ovens per research (door opening pauses)
+        # Phase 2 additions for ovens
+        DeviceCapability.POWER_CONTROL,
+        DeviceCapability.LIGHT_CONTROL,
+        DeviceCapability.USER_REQUESTS,
+    },
+    # Add capability mappings for other device types
+    DeviceType.CoffeeMaker: {
+        DeviceCapability.STATE_REPORTING,
+        DeviceCapability.PROGRAM_REPORTING,
+        DeviceCapability.WAKE_UP,
+        DeviceCapability.REMOTE_START,
+        DeviceCapability.PROGRAM_CATALOG,
+        DeviceCapability.DOP2_BASIC,
+        DeviceCapability.PROGRAM_STOP,
+        # Phase 2 additions for coffee makers
+        DeviceCapability.POWER_CONTROL,
+        DeviceCapability.USER_REQUESTS,  # Extensive coffee functions
+    },
+    DeviceType.Hood: {
+        DeviceCapability.STATE_REPORTING,
+        DeviceCapability.PROGRAM_REPORTING,
+        DeviceCapability.WAKE_UP,
+        DeviceCapability.DOP2_BASIC,
+        # Phase 2 additions for hood (limited power control for cooktop functionality)
+        # Note: Limited power control - may not work reliably for cooktop mode
+    },
+    DeviceType.Fridge: {
+        DeviceCapability.STATE_REPORTING,
+        DeviceCapability.PROGRAM_REPORTING,
+        DeviceCapability.DOP2_BASIC,
+        DeviceCapability.SUPERFREEZING,
+        DeviceCapability.SUPERCOOLING,
+        # Phase 2 additions for fridge
+        DeviceCapability.LIGHT_CONTROL,
+        DeviceCapability.USER_REQUESTS,
+    },
+    DeviceType.Freezer: {
+        DeviceCapability.STATE_REPORTING,
+        DeviceCapability.PROGRAM_REPORTING,
+        DeviceCapability.DOP2_BASIC,
+        DeviceCapability.SUPERFREEZING,
+    },
+    DeviceType.WasherDryer: {
+        DeviceCapability.STATE_REPORTING,
+        DeviceCapability.PROGRAM_REPORTING,
+        DeviceCapability.WAKE_UP,
+        DeviceCapability.REMOTE_START,
+        DeviceCapability.PROGRAM_CATALOG,
+        DeviceCapability.DOP2_BASIC,
+        DeviceCapability.PROGRAM_STOP,
+        DeviceCapability.PROGRAM_PAUSE,
+        DeviceCapability.PROGRAM_RESUME,
+        # Phase 2 additions for washer dryer
+        DeviceCapability.BUZZER_CONTROL,
+        DeviceCapability.CHILD_LOCK,
+        DeviceCapability.USER_REQUESTS,
     },
     # Default for unknown devices - minimal capabilities
     DeviceType.NoUse: {
@@ -335,9 +434,69 @@ async def _test_capability_function(client, device_id: str, capability: DeviceCa
             catalog = await client.get_program_catalog(device_id)
             return catalog is not None and len(catalog.get("programs", {})) > 0
         elif capability == DeviceCapability.DOP2_BASIC:
-            # Test basic DOP2 access
+            # Test basic DOP2 access - try to read system info leaf
+            await client.read_dop2_leaf(device_id, 1, 2)
+            return True
+        elif capability == DeviceCapability.DOP2_ADVANCED:
+            # Test advanced DOP2 access - try to read combined state leaf
+            await client.read_dop2_leaf(device_id, 2, 1586)
+            return True
+        elif capability == DeviceCapability.CONSUMPTION_STATS:
+            # Test consumption stats capability
+            stats = await client.get_consumption_stats(device_id)
+            return bool(stats)
+        elif capability == DeviceCapability.REMOTE_CONTROL:
+            # Test remote control capability
+            await client.get_device_state(device_id)
+            return True
+        elif capability == DeviceCapability.PARAMETER_SELECTION:
+            # Test parameter selection - try SF_VALUE leaf
+            await client.read_dop2_leaf(device_id, 2, 105)
+            return True
+        elif capability == DeviceCapability.PROGRAM_SELECTION:
+            # Test program selection capability
             await client.get_device(device_id)
             return True
+        elif capability == DeviceCapability.PROGRAM_STOP:
+            # Test program stop capability
+            await client.stop_program(device_id)
+            return True
+        elif capability == DeviceCapability.PROGRAM_PAUSE:
+            # Test program pause capability
+            await client.pause_program(device_id)
+            return True
+        elif capability == DeviceCapability.PROGRAM_RESUME:
+            # Test program resume capability
+            await client.resume_program(device_id)
+            return True
+        elif capability == DeviceCapability.PROGRAM_OPTION_MODIFY:
+            # Test program option modify capability - use correct method name
+            await client.set_program_option(device_id, 1000, 1)  # Test with dummy values
+            return True
+        elif capability == DeviceCapability.SUPERFREEZING:
+            # Test superfreezing capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.SUPERCOOLING:
+            # Test supercooling capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.GAS_CONTROL:
+            # Test gas control capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.POWER_CONTROL:
+            # Test power control capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.LIGHT_CONTROL:
+            # Test light control capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.USER_REQUESTS:
+            # Test user requests capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.BUZZER_CONTROL:
+            # Test buzzer control capability - not implemented yet, return False for now
+            return False
+        elif capability == DeviceCapability.CHILD_LOCK:
+            # Test child lock capability - not implemented yet, return False for now
+            return False
         else:
             # For unknown capabilities, assume they don't work
             return False
