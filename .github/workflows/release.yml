@@ -1,0 +1,214 @@
+name: Build and Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write  # Required for trusted publishing to PyPI
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  validate-version:
+    name: Validate Version Match
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      tag-version: ${{ steps.get-tag.outputs.tag-version }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Get tag version
+      id: get-tag
+      run: |
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        echo "tag-version=$TAG_VERSION" >> $GITHUB_OUTPUT
+        echo "Tag version: $TAG_VERSION"
+    
+    - name: Get pyproject.toml version
+      id: get-version
+      run: |
+        VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "pyproject.toml version: $VERSION"
+    
+    - name: Validate version match
+      run: |
+        TAG_VERSION="${{ steps.get-tag.outputs.tag-version }}"
+        PYPROJECT_VERSION="${{ steps.get-version.outputs.version }}"
+        
+        echo "Comparing versions:"
+        echo "  Git tag: v$TAG_VERSION"
+        echo "  pyproject.toml: $PYPROJECT_VERSION"
+        
+        if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+          echo "❌ ERROR: Version mismatch!"
+          echo "   Git tag version: $TAG_VERSION"
+          echo "   pyproject.toml version: $PYPROJECT_VERSION"
+          echo ""
+          echo "To fix this:"
+          echo "1. Update version in pyproject.toml to match tag, or"
+          echo "2. Create a new tag that matches pyproject.toml version"
+          exit 1
+        fi
+        
+        echo "✅ Versions match! Proceeding with release of version $PYPROJECT_VERSION"
+
+  build:
+    name: Build Distribution
+    runs-on: ubuntu-latest
+    needs: validate-version
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+    
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install build twine check-manifest
+    
+    - name: Validate MANIFEST.in
+      run: |
+        check-manifest --verbose
+    
+    - name: Build sdist and wheel
+      run: |
+        echo "Building distributions for asyncmiele v${{ needs.validate-version.outputs.version }}"
+        python -m build --sdist --wheel --outdir dist/
+    
+    - name: Verify distributions
+      run: |
+        echo "Built distributions:"
+        ls -la dist/
+        echo "Checking distributions:"
+        python -m twine check dist/*
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-distributions
+        path: dist/
+        retention-days: 7
+
+  test-install:
+    name: Test Installation
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-distributions
+        path: dist/
+    
+    - name: Test wheel installation
+      run: |
+        echo "Testing wheel installation on Python ${{ matrix.python-version }}"
+        pip install dist/*.whl
+        python -c "import asyncmiele; print('✅ Import successful')"
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [validate-version, build, test-install]
+    
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-distributions
+        path: dist/
+    
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        print-hash: true
+        verbose: true
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-version, publish-pypi]
+    permissions:
+      contents: write
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-distributions
+        path: dist/
+    
+    - name: Generate changelog
+      id: changelog
+      run: |
+        echo "Generating changelog since last release..."
+        PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+        
+        if [ -z "$PREVIOUS_TAG" ]; then
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+        else
+          CHANGELOG=$(git log $PREVIOUS_TAG..${{ github.ref_name }} --pretty=format:"- %s (%h)" --no-merges)
+        fi
+        
+        if [ -z "$CHANGELOG" ]; then
+          CHANGELOG="- No notable changes in this release"
+        fi
+        
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
+        body: |
+          # AsyncMiele ${{ needs.validate-version.outputs.version }}
+          
+          ## What's Changed
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Installation
+          ```bash
+          pip install asyncmiele==${{ needs.validate-version.outputs.version }}
+          ```
+          
+          ## Requirements
+          - Python 3.11+
+        draft: false
+        prerelease: ${{ contains(needs.validate-version.outputs.version, 'rc') || contains(needs.validate-version.outputs.version, 'beta') || contains(needs.validate-version.outputs.version, 'alpha') }}
+        files: |
+          dist/asyncmiele-${{ needs.validate-version.outputs.version }}-py3-none-any.whl
+          dist/asyncmiele-${{ needs.validate-version.outputs.version }}.tar.gz
+
+ 

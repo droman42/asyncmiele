@@ -4,18 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asyncmiele"
-version = "0.2.0"
+version = "0.2.5"
 authors = [
     {name = "asyncmiele contributors"},
 ]
 description = "Async Python client for Miele@Home devices"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -34,13 +34,30 @@ dependencies = [
 "Bug Tracker" = "https://github.com/yourusername/asyncmiele/issues"
 
 [tool.setuptools]
-# Include asyncmiele code *and* the standalone namespace package ``resources``
-# which holds JSON catalogues and enum tables.
-packages = ["asyncmiele", "resources"]
+# Configure package discovery to only include main packages
+# Exclude test packages and development files from wheel
 
-# Ship JSON data files alongside the packages.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["asyncmiele*", "resources*", "scripts*"]
+exclude = [
+    "tests*",
+    "docs*", 
+    "examples*",
+    "*.tests*",
+    "*.tests",
+]
+
+# Ship JSON data files alongside the packages
 [tool.setuptools.package-data]
 "resources" = ["**/*.json"]
+"asyncmiele" = ["py.typed"]  # Mark package as typed for type checkers
+
+[dependency-groups]
+dev = [
+    "build>=1.2.2.post1",
+    "check-manifest>=0.50",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]

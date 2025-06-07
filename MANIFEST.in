@@ -1,0 +1,54 @@
+# Include essential files
+include README.md
+include LICENSE
+include CHANGELOG.md
+include pyproject.toml
+
+# Include package source code
+recursive-include asyncmiele *.py
+recursive-include resources *.py *.json
+
+# Include examples and scripts for documentation purposes
+recursive-include examples *.py *.md *.json
+recursive-include scripts *.py
+
+# Exclude development and testing files
+exclude .envrc
+exclude pytest.ini
+exclude uv.lock
+exclude *.json
+exclude device_*.json
+exclude *_profile_*.json
+
+# Exclude development directories
+recursive-exclude .vscode *
+recursive-exclude .pytest_cache *
+recursive-exclude .github *
+recursive-exclude tests *
+recursive-exclude docs *
+
+recursive-exclude .venv *
+recursive-exclude .git *
+
+# Exclude build artifacts
+recursive-exclude *.egg-info *
+recursive-exclude build *
+recursive-exclude dist *
+recursive-exclude __pycache__ *
+recursive-exclude .* *
+
+# Exclude OS and IDE files
+exclude .DS_Store
+exclude Thumbs.db
+exclude .gitignore
+exclude .gitattributes
+
+# Exclude development configuration files
+exclude CONTRIBUTING.md
+exclude *.cfg
+exclude *.ini
+exclude tox.ini
+exclude .pre-commit-config.yaml
+
+# Force include pyproject.toml (it may get excluded by .* pattern)
+include pyproject.toml 
