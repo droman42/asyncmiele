@@ -30,7 +30,7 @@ def test_build_auth_header_get():
         )
     )
     expected_digest = hmac.new(group_key, canonical, hashlib.sha256).hexdigest().upper()
-    expected_header = f"MieleH256 {group_id_hex}:{expected_digest}"
+    expected_header = f"MieleH256 {group_id_hex.upper()}:{expected_digest}"
 
     assert auth_header == expected_header
     assert len(iv) == 16

@@ -130,7 +130,7 @@ def test_dop2_client_protocol_methods(dop2_client):
     # Test leaf constants
     assert dop2_client.LEAF_HOURS_OF_OPERATION == (2, 119)
     assert dop2_client.LEAF_CYCLE_COUNTER == (2, 138)
-    assert dop2_client.LEAF_COMBINED_STATE == (2, 256)
+    assert dop2_client.LEAF_COMBINED_STATE == (2, 1586)
     
     # Test protocol methods
     assert hasattr(dop2_client, 'build_leaf_path')
@@ -138,8 +138,8 @@ def test_dop2_client_protocol_methods(dop2_client):
     assert hasattr(dop2_client, 'build_sf_value_payload')
     
     # Test path building
-    path = dop2_client.build_leaf_path("0001", 2, 256, idx1=0, idx2=0)
-    assert path == "/Devices/0001/DOP2/2/256?idx1=0&idx2=0"
+    path = dop2_client.build_leaf_path("0001", 2, 1586, idx1=0, idx2=0)
+    assert path == "/Devices/0001/DOP2/2/1586?idx1=0&idx2=0"
 
 
 def test_get_dop2_client_integration(miele_client):

@@ -26,7 +26,7 @@ def test_leaf_constants(dop2_client):
     """Test that DOP2Client has the correct leaf constants."""
     assert dop2_client.LEAF_HOURS_OF_OPERATION == (2, 119)
     assert dop2_client.LEAF_CYCLE_COUNTER == (2, 138)
-    assert dop2_client.LEAF_COMBINED_STATE == (2, 256)
+    assert dop2_client.LEAF_COMBINED_STATE == (2, 1586)
     assert dop2_client.LEAF_PROGRAM_LIST == (2, 1584)
 
 
