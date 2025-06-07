@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        python-version: ["3.11", "3.12"]
       fail-fast: false
 
     steps:
@@ -37,9 +37,9 @@ jobs:
     - name: Run tests
       run: |
         # Run pytest with options to treat warnings as non-fatal
-        # Set PYTHONWARNINGS=ignore to suppress warning output completely
+        # Warnings will be shown but won't fail the build
         # We use --tb=short for concise error output in CI
-        PYTHONWARNINGS=ignore uv run pytest tests/ -v --tb=short
+        uv run pytest tests/ -v --tb=short
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -75,7 +75,7 @@ jobs:
         
     - name: Run tests with coverage
       run: |
-        PYTHONWARNINGS=ignore uv run pytest tests/ --cov=asyncmiele --cov-report=xml --cov-report=html
+        uv run pytest tests/ --cov=asyncmiele --cov-report=xml --cov-report=html
         
     - name: Upload coverage reports
       uses: actions/upload-artifact@v4

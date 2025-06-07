@@ -12,7 +12,7 @@ This workflow runs automatically on:
 
 #### Jobs
 
-1. **test**: Runs the test suite on multiple Python versions (3.8, 3.9, 3.10, 3.11)
+1. **test**: Runs the test suite on multiple Python versions (3.11, 3.12)
    - Uses `uv` for fast dependency management
    - Warnings are treated as non-fatal (don't fail the build)
    - Test results are uploaded as artifacts
