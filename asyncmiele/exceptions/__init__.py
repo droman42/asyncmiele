@@ -20,6 +20,7 @@ from asyncmiele.exceptions.auth import AuthenticationException, InvalidCredentia
 from asyncmiele.exceptions.network import NetworkException, NetworkConnectionError, NetworkTimeoutError, ResponseError
 from asyncmiele.exceptions.config import ConfigurationError, UnsupportedCapabilityError, DeviceConfigurationError, ValidationError
 from asyncmiele.exceptions.connection import ConnectionException, ConnectionLostError, ReconnectionError, ConnectionPoolExhaustedError, DeviceResetError, DeviceSleepError, ConnectionHealthError
+from asyncmiele.exceptions.setup import SetupError, WifiConfigurationError, ProvisioningError, DeviceNotInSetupModeError, AccessPointConnectionError
 
 # Add them to __all__ for proper import exposure
 __all__ += [
@@ -29,4 +30,5 @@ __all__ += [
     'ConfigurationError', 'UnsupportedCapabilityError', 'DeviceConfigurationError', 'ValidationError',
     'ConnectionException', 'ConnectionLostError', 'ReconnectionError', 'ConnectionPoolExhaustedError',
     'DeviceResetError', 'DeviceSleepError', 'ConnectionHealthError',
+    'SetupError', 'WifiConfigurationError', 'ProvisioningError', 'DeviceNotInSetupModeError', 'AccessPointConnectionError',
 ]
